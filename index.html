@@ -1156,8 +1156,19 @@ function showImport(){
 `);
 }
 function switchImpTab(t){
+  // Create file panel if missing
+  if(t==='file'&&!document.getElementById('imp-file')){
+    const vcard=document.getElementById('imp-vcard');
+    if(vcard){
+      const fp=document.createElement('div');
+      fp.id='imp-file';
+      fp.style.display='none';
+      fp.innerHTML='<label for="ai-file-input" style="display:block;border:2px dashed rgba(30,125,232,.3);border-radius:12px;padding:24px;text-align:center;margin-bottom:12px;background:rgba(30,125,232,.02);cursor:pointer"><div style="font-size:36px;margin-bottom:8px">📎</div><div style="font-size:14px;font-weight:600;color:#1e7de8;margin-bottom:4px">Загрузите любой файл</div><div style="font-size:11px;color:#999;margin-bottom:12px">PDF, Word, Excel, фото, скриншот — AI извлечёт контакты</div><input type="file" id="ai-file-input" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.vcf" onchange="handleAIFileSelect(this)" style="position:absolute;opacity:0;width:1px;height:1px"><span style="display:inline-block;padding:12px 28px;background:#1e7de8;color:white;border:none;border-radius:10px;font-size:15px;font-weight:600">📎 Выбрать файл</span></label><div id="ai-file-name" style="display:none;font-size:12px;color:#666;margin-bottom:8px;padding:8px;background:#f5f5f5;border-radius:8px"></div><button id="ai-file-import-btn" onclick="aiFileImport()" style="display:none;width:100%;padding:12px;background:linear-gradient(135deg,#1e7de8,#6c3cf0);color:white;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer">🤖 AI Анализ и Импорт</button>';
+      vcard.parentElement.insertBefore(fp,vcard.nextSibling);
+    }
+  }
   ['csv','text','vcard','file'].forEach(k=>{
-    document.getElementById('imp-'+k).style.display=k===t?'block':'none';
+    const el=document.getElementById('imp-'+k);if(el)el.style.display=k===t?'block':'none';
     document.getElementById('imp-tab-'+k).classList.toggle('active',k===t);
   });
 }
