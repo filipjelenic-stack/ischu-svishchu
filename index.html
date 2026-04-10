@@ -1326,10 +1326,51 @@ function handleCandFiles(candId,fileList){
     reader.readAsDataURL(f);
   });
 }
+function _dataUrlToBlob(dataUrl){
+  // data:<mime>;base64,<payload>
+  const m = typeof dataUrl==='string' ? dataUrl.match(/^data:([^;]+);base64,(.+)$/) : null;
+  if (!m) return null;
+  const mime = m[1];
+  const bin = atob(m[2]);
+  const len = bin.length;
+  const bytes = new Uint8Array(len);
+  for (let i=0;i<len;i++) bytes[i]=bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+function _isIOS(){
+  return /iPad|iPhone|iPod/.test(navigator.userAgent||'') ||
+         (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1); // iPadOS 13+
+}
 function downloadCandFile(candId,fileId){
-  const c=candidates.find(x=>x.id===candId);if(!c)return;
-  const f=c.files.find(x=>x.id===fileId);if(!f)return;
-  const a=document.createElement('a');a.href=f.data;a.download=f.name;document.body.appendChild(a);a.click();document.body.removeChild(a);
+  const c=candidates.find(x=>x.id===candId);if(!c){alert('Кандидат не найден');return;}
+  const f=(c.files||[]).find(x=>x.id===fileId);if(!f){alert('Файл не найден');return;}
+  try{
+    const blob = _dataUrlToBlob(f.data);
+    if (!blob) {
+      // No data URL — try direct anchor with whatever we have
+      const a=document.createElement('a');a.href=f.data||'#';a.download=f.name||'file';a.target='_blank';document.body.appendChild(a);a.click();document.body.removeChild(a);
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    if (_isIOS()) {
+      // iOS Safari: open in new tab — user can then tap share → save to Files
+      const w = window.open(url, '_blank');
+      if (!w) {
+        // Popup blocked — fallback: navigate same window
+        location.href = url;
+      }
+    } else {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = f.name || 'file';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+    setTimeout(function(){ try{ URL.revokeObjectURL(url); }catch(e){} }, 60000);
+  }catch(e){
+    alert('Ошибка скачивания: '+(e.message||e));
+  }
 }
 function deleteCandFile(candId,fileId){
   if(!confirm('Удалить файл?'))return;
