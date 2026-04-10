@@ -1,4 +1,11 @@
 const https = require('https');
+// Lazy-loaded docx parser (available on server as fallback)
+let _mammoth = null;
+function getMammoth(){
+  if (_mammoth) return _mammoth;
+  try { _mammoth = require('mammoth'); } catch (e) { _mammoth = false; }
+  return _mammoth;
+}
 
 module.exports = async (req, res) => {
   // CORS
@@ -35,32 +42,57 @@ module.exports = async (req, res) => {
     case 'file_import': {
       const fileName = data.filename || data.fileName || 'file';
       const fileType = (data.filetype || data.mimeType || '').toLowerCase();
+      const kindHint = (data.kind || '').toLowerCase();
+      const preText = typeof data.text === 'string' ? data.text : '';
       let rawData = data.filedata || data.fileContent || '';
-      // Strip data URL prefix if present: "data:application/pdf;base64,XXXX"
+      // Strip data URL prefix: "data:application/pdf;base64,XXXX"
       let detectedMime = fileType;
       let base64 = rawData;
       const m = typeof rawData === 'string' ? rawData.match(/^data:([^;]+);base64,(.+)$/) : null;
       if (m) {
-        detectedMime = detectedMime || m[1].toLowerCase();
+        if (!detectedMime) detectedMime = m[1].toLowerCase();
         base64 = m[2];
       }
 
       prompt = `You are extracting candidate/contact data from a resume or contact file. Return ONLY a valid JSON array (no prose, no markdown) with one object per person. Each object MUST have these fields: name, position, company, phone, email, telegram, source, notes. The "name" field MUST contain the full name of the person exactly as written in the document — never leave it empty if any name is present. Use empty string "" only for truly unknown fields. File name: ${fileName}`;
 
-      if (base64) {
-        if (detectedMime.startsWith('image/')) {
+      // 1) If client pre-extracted text (PDF/DOCX/TXT/CSV/VCF) — send as text, no file attachment
+      if (preText && preText.trim().length > 0) {
+        prompt += `\n\nFile content (extracted text):\n${preText.slice(0, 120000)}`;
+      } else if (base64) {
+        // 2) Native multimodal for images and PDFs
+        if ((detectedMime && detectedMime.startsWith('image/')) || kindHint === 'image') {
           isMultimodal = true;
-          fileData = { kind: 'image', mime: detectedMime, base64 };
-        } else if (detectedMime === 'application/pdf' || fileName.toLowerCase().endsWith('.pdf')) {
+          fileData = { kind: 'image', mime: detectedMime || 'image/jpeg', base64 };
+        } else if (detectedMime === 'application/pdf' || fileName.toLowerCase().endsWith('.pdf') || kindHint === 'pdf') {
           isMultimodal = true;
           fileData = { kind: 'document', mime: 'application/pdf', base64 };
+        } else if (kindHint === 'docx' || kindHint === 'doc' || fileName.toLowerCase().endsWith('.docx') || fileName.toLowerCase().endsWith('.doc') || detectedMime === 'application/msword' || detectedMime.indexOf('officedocument.wordprocessingml') >= 0) {
+          // Word document — use mammoth on server
+          const mammoth = getMammoth();
+          if (mammoth) {
+            try {
+              const buf = Buffer.from(base64, 'base64');
+              const r = await mammoth.extractRawText({ buffer: buf });
+              const text = (r && r.value ? r.value : '').trim();
+              if (text.length > 10) {
+                prompt += `\n\nFile content (extracted from Word document):\n${text.slice(0, 120000)}`;
+              } else {
+                prompt += `\n\n(Word document had no extractable text.)`;
+              }
+            } catch (err) {
+              prompt += `\n\n(Failed to parse Word document: ${err.message}.)`;
+            }
+          } else {
+            prompt += `\n\n(Word parser not available on server — install mammoth.)`;
+          }
         } else {
-          // Text-based file: decode base64 → utf-8 and include in prompt
+          // Fallback: decode base64 → utf-8 text
           try {
             const text = Buffer.from(base64, 'base64').toString('utf-8');
-            prompt += `\n\nFile content:\n${text}`;
+            prompt += `\n\nFile content:\n${text.slice(0, 80000)}`;
           } catch (err) {
-            prompt += `\n\n(Unsupported binary file type: ${detectedMime}. Please convert to PDF or plain text.)`;
+            prompt += `\n\n(Unsupported binary file type: ${detectedMime}.)`;
           }
         }
       }
