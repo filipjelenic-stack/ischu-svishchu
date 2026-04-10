@@ -1,10 +1,49 @@
 const https = require('https');
-// Lazy-loaded docx parser (available on server as fallback)
+// Lazy-loaded parsers (available on server as fallback)
 let _mammoth = null;
 function getMammoth(){
   if (_mammoth) return _mammoth;
   try { _mammoth = require('mammoth'); } catch (e) { _mammoth = false; }
   return _mammoth;
+}
+let _wordExtractor = null;
+function getWordExtractor(){
+  if (_wordExtractor) return _wordExtractor;
+  try {
+    const WE = require('word-extractor');
+    _wordExtractor = new WE();
+  } catch (e) { _wordExtractor = false; }
+  return _wordExtractor;
+}
+async function extractWordText(buf){
+  // Try mammoth first (handles .docx, and also .doc-renamed-as-docx)
+  const mm = getMammoth();
+  if (mm) {
+    try {
+      const r = await mm.extractRawText({ buffer: buf });
+      if (r && r.value && r.value.trim().length > 10) return r.value.trim();
+    } catch (e) { /* fall through */ }
+  }
+  // Try word-extractor for legacy OLE2 .doc
+  const we = getWordExtractor();
+  if (we) {
+    try {
+      // word-extractor accepts a buffer via temp path — write to /tmp
+      const fs = require('fs');
+      const os = require('os');
+      const path = require('path');
+      const tmpPath = path.join(os.tmpdir(), 'ischu_'+Date.now()+'_'+Math.random().toString(36).slice(2)+'.doc');
+      fs.writeFileSync(tmpPath, buf);
+      try {
+        const doc = await we.extract(tmpPath);
+        const text = (doc.getBody() || '').trim();
+        return text;
+      } finally {
+        try { fs.unlinkSync(tmpPath); } catch(e){}
+      }
+    } catch (e) { /* fall through */ }
+  }
+  return '';
 }
 
 module.exports = async (req, res) => {
@@ -68,23 +107,17 @@ module.exports = async (req, res) => {
           isMultimodal = true;
           fileData = { kind: 'document', mime: 'application/pdf', base64 };
         } else if (kindHint === 'docx' || kindHint === 'doc' || fileName.toLowerCase().endsWith('.docx') || fileName.toLowerCase().endsWith('.doc') || detectedMime === 'application/msword' || detectedMime.indexOf('officedocument.wordprocessingml') >= 0) {
-          // Word document — use mammoth on server
-          const mammoth = getMammoth();
-          if (mammoth) {
-            try {
-              const buf = Buffer.from(base64, 'base64');
-              const r = await mammoth.extractRawText({ buffer: buf });
-              const text = (r && r.value ? r.value : '').trim();
-              if (text.length > 10) {
-                prompt += `\n\nFile content (extracted from Word document):\n${text.slice(0, 120000)}`;
-              } else {
-                prompt += `\n\n(Word document had no extractable text.)`;
-              }
-            } catch (err) {
-              prompt += `\n\n(Failed to parse Word document: ${err.message}.)`;
+          // Word document — try mammoth (docx), then word-extractor (legacy .doc)
+          try {
+            const buf = Buffer.from(base64, 'base64');
+            const text = await extractWordText(buf);
+            if (text && text.length > 10) {
+              prompt += `\n\nFile content (extracted from Word document):\n${text.slice(0, 120000)}`;
+            } else {
+              prompt += `\n\n(Word document had no extractable text. Please convert to PDF.)`;
             }
-          } else {
-            prompt += `\n\n(Word parser not available on server — install mammoth.)`;
+          } catch (err) {
+            prompt += `\n\n(Failed to parse Word document: ${err.message}.)`;
           }
         } else {
           // Fallback: decode base64 → utf-8 text
@@ -107,13 +140,24 @@ module.exports = async (req, res) => {
       prompt = `Write a professional recruitment outreach message in Russian for this candidate. Return JSON with: email (object with subject and body), telegram (string - short message). Candidate:\n${JSON.stringify(data.candidate)}\nVacancy: ${data.vacancy || 'general recruitment'}`;
       break;
 
-    case 'find_duplicates':
-      prompt = `Analyze this list of candidates and find potential duplicates (same person with slightly different data). Return JSON array of arrays, where each inner array contains indices of duplicate candidates. Candidates:\n${JSON.stringify(data.candidates)}`;
+    case 'find_duplicates': {
+      const cands = data.candidates || data.contacts || data;
+      prompt = `Analyze this list of candidates and find potential duplicates (same person with slightly different data). Return JSON array of arrays, where each inner array contains indices of duplicate candidates. Candidates:\n${JSON.stringify(cands)}`;
       break;
+    }
 
-    case 'pipeline_insights':
-      prompt = `Analyze this recruitment pipeline data and provide insights. Return JSON with: summary (string in Russian), bottlenecks (array of strings), recommendations (array of strings), metrics (object with avgTimeToHire, conversionRate, topSources). Data:\n${JSON.stringify(data.stats)}`;
+    case 'pipeline_insights': {
+      const stats = data.stats || data;
+      prompt = `Analyze this recruitment pipeline data and provide concise insights in Russian. Return ONLY a valid JSON object (no prose, no markdown) with these exact fields:
+{
+  "summary": "<2-3 sentences overview in Russian>",
+  "insights": [{"type": "warning"|"success"|"info", "text": "<short insight in Russian>"}, ...],
+  "recommendations": ["<actionable recommendation in Russian>", ...],
+  "metrics": {"avgTimeToHire": "<text>", "conversionRate": "<text>", "topSources": ["<source>", ...]}
+}
+Data:\n${JSON.stringify(stats)}`;
       break;
+    }
 
     default:
       return res.status(400).json({ error: `Unknown action: ${action}` });
