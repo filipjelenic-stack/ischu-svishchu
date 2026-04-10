@@ -38,6 +38,9 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
 .header-sub{font-size:10px;color:rgba(255,255,255,0.65);font-weight:500}
 .header-actions{display:flex;gap:6px}
 .header-btn{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);color:white;border-radius:20px;padding:5px 10px;font-size:12px;font-family:'Nunito',sans-serif;font-weight:600;cursor:pointer;white-space:nowrap}
+.header-bell{position:relative;padding:4px 8px}
+.notif-badge{position:absolute;top:-4px;right:-4px;background:#ef4444;color:white;font-size:9px;font-weight:800;min-width:16px;height:16px;border-radius:8px;display:flex;align-items:center;justify-content:center;padding:0 4px;border:1.5px solid #040a1e;box-shadow:0 0 0 1.5px #ef4444;animation:bellPulse 2s ease-in-out infinite}
+@keyframes bellPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.15)}}
 /* BOTTOM NAV BAR (iOS-style) */
 #tab-strip{position:fixed;bottom:0;left:0;right:0;background:rgba(255,255,255,0.96);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-top:1px solid #e5ecf5;display:flex;justify-content:space-around;padding:6px 4px calc(6px + var(--safe-bottom));z-index:99;box-shadow:0 -2px 12px rgba(4,10,30,0.04)}
 #tab-strip::-webkit-scrollbar{display:none}
@@ -183,9 +186,14 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
 /* BOTTOM SHEET */
 .sheet-backdrop{position:fixed;inset:0;background:rgba(6,14,46,.5);z-index:200;display:none;backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)}
 .sheet-backdrop.open{display:block}
-.bottom-sheet{position:fixed;bottom:0;left:50%;transform:translateX(-50%) translateY(100%);width:100%;max-width:430px;background:white;border-radius:20px 20px 0 0;z-index:201;transition:transform .3s cubic-bezier(.34,1.56,.64,1);max-height:90dvh;display:flex;flex-direction:column;overflow:hidden}
+.bottom-sheet{position:fixed;bottom:0;left:50%;transform:translateX(-50%) translateY(100%);width:100%;max-width:430px;background:white;border-radius:20px 20px 0 0;z-index:201;transition:transform .3s cubic-bezier(.34,1.56,.64,1);max-height:90dvh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -8px 32px rgba(4,10,30,0.15)}
 .bottom-sheet.open{transform:translateX(-50%) translateY(0)}
-.sheet-handle{width:40px;height:4px;background:#d0e4ff;border-radius:2px;margin:10px auto 0;flex-shrink:0}
+.bottom-sheet.dragging{transition:none}
+.sheet-grip{width:100%;padding:10px 12px 6px;flex-shrink:0;cursor:grab;touch-action:none;display:flex;flex-direction:column;align-items:center;gap:4px;position:relative}
+.sheet-grip:active{cursor:grabbing}
+.sheet-handle{width:44px;height:5px;background:#d0e4ff;border-radius:3px;pointer-events:none}
+.sheet-close-btn{position:absolute;top:8px;right:12px;width:36px;height:36px;border-radius:50%;background:#f0f4fa;border:none;color:#6b87b0;font-size:17px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:2;-webkit-tap-highlight-color:transparent;transition:background .15s,transform .15s}
+.sheet-close-btn:active{background:#e0e8f2;transform:scale(0.92)}
 .sheet-content{overflow-y:auto;flex:1;padding:16px;padding-bottom:calc(16px + var(--safe-bottom))}
 .sheet-title{font-size:17px;font-weight:800;margin-bottom:16px;text-align:center}
 /* FORMS */
@@ -421,8 +429,12 @@ function showIntro(){
     </div>
   </div>
   <div class="header-actions">
-    <button class="header-btn" onclick="showImport()">↑ Импорт</button>
-    <button class="header-btn" onclick="doExport()">↓ Экспорт</button>
+    <button class="header-btn header-bell" id="notif-bell" onclick="openNotifications()" aria-label="Уведомления">
+      <span style="font-size:15px">🔔</span>
+      <span class="notif-badge" id="notif-badge" style="display:none">0</span>
+    </button>
+    <button class="header-btn" onclick="showImport()">↑</button>
+    <button class="header-btn" onclick="doExport()">↓</button>
   </div>
 </header>
 <div id="tab-strip">
@@ -442,7 +454,10 @@ function showIntro(){
 <button class="fab" id="fab-btn" style="display:none" onclick="fabAction()">+</button>
 <div class="sheet-backdrop" id="sheet-backdrop" onclick="closeSheet()"></div>
 <div class="bottom-sheet" id="bottom-sheet">
-  <div class="sheet-handle"></div>
+  <div class="sheet-grip" id="sheet-grip" onclick="closeSheet()">
+    <div class="sheet-handle"></div>
+    <button class="sheet-close-btn" id="sheet-close-btn" onclick="event.stopPropagation();closeSheet()" aria-label="Закрыть">✕</button>
+  </div>
   <div class="sheet-content" id="sheet-content"></div>
 </div>
 <script>
@@ -468,20 +483,428 @@ const MONTHS_GEN = ['января','февраля','марта','апреля',
 // ── DATA ──
 let candidates=[], vacancies=[], tasks=[];
 
+// Schema migration: additive only — fills missing fields with safe defaults on load.
+// NEVER remove or rename existing fields here. Only ADD new ones.
+function migrateCandidate(c){
+  if(!c||typeof c!=='object') return null;
+  c.id = c.id || genId();
+  c.name = c.name || '';
+  c.position = c.position || '';
+  c.company = c.company || '';
+  c.status = c.status || 'new';
+  c.source = c.source || 'other';
+  c.vacancy = c.vacancy || '';
+  c.rating = (typeof c.rating==='number') ? c.rating : 3;
+  c.salaryMin = (typeof c.salaryMin==='number') ? c.salaryMin : 0;
+  c.salaryMax = (typeof c.salaryMax==='number') ? c.salaryMax : 0;
+  c.interviewDate = c.interviewDate || '';
+  c.nextAction = c.nextAction || '';
+  c.phones = Array.isArray(c.phones) ? c.phones : [];
+  c.emails = Array.isArray(c.emails) ? c.emails : [];
+  c.socials = Array.isArray(c.socials) ? c.socials : [];
+  c.notes = c.notes || '';
+  if(c.photo===undefined) c.photo = null;
+  c.files = Array.isArray(c.files) ? c.files : [];
+  c.activityLog = Array.isArray(c.activityLog) ? c.activityLog : [];
+  c.created = c.created || todayStr();
+  return c;
+}
+function migrateVacancy(v){
+  if(!v||typeof v!=='object') return null;
+  v.id = v.id || genId();
+  v.title = v.title || '';
+  v.dept = v.dept || '';
+  v.status = v.status || 'open';
+  v.salaryMin = (typeof v.salaryMin==='number') ? v.salaryMin : 0;
+  v.salaryMax = (typeof v.salaryMax==='number') ? v.salaryMax : 0;
+  v.deadline = v.deadline || '';
+  v.requirements = v.requirements || '';
+  v.description = v.description || '';
+  v.created = v.created || todayStr();
+  return v;
+}
+function migrateTask(t){
+  if(!t||typeof t!=='object') return null;
+  t.id = t.id || genId();
+  t.title = t.title || '';
+  t.actionType = t.actionType || 'note';
+  t.candidateId = c_(t.candidateId);
+  t.actionTarget = t.actionTarget || '';
+  t.dueDate = t.dueDate || '';
+  t.priority = t.priority || 'medium';
+  t.done = !!t.done;
+  t.note = t.note || '';
+  t.created = t.created || todayStr();
+  return t;
+}
+function c_(v){ return v==null ? '' : v; }
+
 function loadData(){
   try{
-    candidates=JSON.parse(localStorage.getItem('ischu_candidates')||'[]');
-    vacancies=JSON.parse(localStorage.getItem('ischu_vacancies')||'[]');
-    tasks=JSON.parse(localStorage.getItem('ischu_tasks')||'[]');
-  }catch(e){candidates=[];vacancies=[];tasks=[];}
+    candidates=(JSON.parse(localStorage.getItem('ischu_candidates')||'[]')||[]).map(migrateCandidate).filter(Boolean);
+    vacancies=(JSON.parse(localStorage.getItem('ischu_vacancies')||'[]')||[]).map(migrateVacancy).filter(Boolean);
+    tasks=(JSON.parse(localStorage.getItem('ischu_tasks')||'[]')||[]).map(migrateTask).filter(Boolean);
+  }catch(e){console.warn('loadData error', e); candidates=[];vacancies=[];tasks=[];}
   if(!candidates.length && !vacancies.length && !tasks.length) seedData();
+  setTimeout(()=>{ try{ updateNotifBadge(); }catch(e){} }, 50);
 }
 function saveData(){
-  localStorage.setItem('ischu_candidates',JSON.stringify(candidates));
-  localStorage.setItem('ischu_vacancies',JSON.stringify(vacancies));
-  localStorage.setItem('ischu_tasks',JSON.stringify(tasks));
+  try{
+    localStorage.setItem('ischu_candidates',JSON.stringify(candidates));
+    localStorage.setItem('ischu_vacancies',JSON.stringify(vacancies));
+    localStorage.setItem('ischu_tasks',JSON.stringify(tasks));
+  }catch(e){
+    // Likely quota exceeded from large file attachments
+    console.error('saveData failed', e);
+    if(typeof showToast==='function') showToast('⚠️ Недостаточно места для сохранения. Удалите крупные файлы из контактов.', 'error', 6000);
+  }
+  if(typeof updateNotifBadge==='function') updateNotifBadge();
 }
 function genId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
+
+// ── DUPLICATE DETECTION ────────────────────
+function _norm(s){return (s||'').toString().toLowerCase().replace(/\s+/g,' ').trim();}
+function _normPhone(p){return (p||'').toString().replace(/\D/g,'').replace(/^8/,'7');}
+function _normEmail(e){return (e||'').toString().toLowerCase().trim();}
+// Returns existing candidate that duplicates the new one, or null
+function findDuplicate(newCand, excludeId){
+  if(!newCand) return null;
+  const name=_norm(newCand.name);
+  const phones=(newCand.phones||[]).map(p=>_normPhone(p&&p.value)).filter(Boolean);
+  const emails=(newCand.emails||[]).map(e=>_normEmail(e&&e.value)).filter(Boolean);
+  if(!name && !phones.length && !emails.length) return null;
+  for (const c of candidates){
+    if(excludeId && c.id===excludeId) continue;
+    // Exact name match
+    if(name && _norm(c.name)===name) return c;
+    // Any phone matches
+    const cPhones=(c.phones||[]).map(p=>_normPhone(p&&p.value)).filter(Boolean);
+    for(const p of phones){ if(p.length>=7 && cPhones.includes(p)) return c; }
+    // Any email matches
+    const cEmails=(c.emails||[]).map(e=>_normEmail(e&&e.value)).filter(Boolean);
+    for(const e of emails){ if(e && cEmails.includes(e)) return c; }
+  }
+  return null;
+}
+// Merge new candidate data INTO existing, preserving existing when new is empty
+function mergeCandidate(existing, incoming){
+  if(incoming.position && !existing.position) existing.position=incoming.position;
+  else if(incoming.position && existing.position && incoming.position!==existing.position) existing.position=existing.position+' / '+incoming.position;
+  if(incoming.company && !existing.company) existing.company=incoming.company;
+  if(incoming.notes){
+    existing.notes = (existing.notes ? existing.notes+'\n' : '') + incoming.notes;
+  }
+  // Merge phones/emails/socials, avoiding duplicates
+  ['phones','emails','socials'].forEach(k=>{
+    (incoming[k]||[]).forEach(item=>{
+      const exists=(existing[k]||[]).some(x=>_norm(x.value)===_norm(item.value));
+      if(!exists){ existing[k]=existing[k]||[]; existing[k].push(item); }
+    });
+  });
+  // Merge files
+  (incoming.files||[]).forEach(f=>{
+    const exists=(existing.files||[]).some(x=>x.name===f.name && x.size===f.size);
+    if(!exists){ existing.files=existing.files||[]; existing.files.push(f); }
+  });
+  // Prefer photo if existing has none
+  if(!existing.photo && incoming.photo) existing.photo=incoming.photo;
+  // Log the merge
+  existing.activityLog=existing.activityLog||[];
+  existing.activityLog.push({id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Объединено с данными из импорта',type:'note'});
+  return existing;
+}
+// Bulk-import dedupe strategy chooser — asks user once for the whole batch
+// Returns promise resolving to 'skip'|'merge'|'both'|'ask' or null if cancelled
+function askDedupeStrategy(importName){
+  return new Promise((resolve)=>{
+    const html = '<div style="font-size:13px;line-height:1.5">' +
+      '<p style="color:#6b87b0;margin-bottom:12px">Что делать если контакт уже существует в базе?</p>' +
+      '</div>';
+    showModal('🔍 '+importName+': стратегия дубликатов', html, [
+      { text:'🔄 Обновить существующие', cls:'primary', action:function(){ closeModal(); resolve('merge'); }},
+      { text:'➕ Всегда добавлять новый', action:function(){ closeModal(); resolve('both'); }},
+      { text:'⏭ Пропускать дубли', action:function(){ closeModal(); resolve('skip'); }},
+      { text:'❓ Спрашивать каждый раз', action:function(){ closeModal(); resolve('ask'); }},
+      { text:'Отмена', action:function(){ closeModal(); resolve(null); }}
+    ]);
+  });
+}
+
+// Toast notification (non-blocking, auto-dismiss)
+function showToast(msg, type, duration){
+  type=type||'info'; duration=duration||3000;
+  const existing=document.querySelectorAll('.ischu-toast'); existing.forEach(e=>e.remove());
+  const toast=document.createElement('div');
+  toast.className='ischu-toast';
+  const colors={
+    info:'#1e7de8',
+    success:'#22c55e',
+    error:'#ef4444',
+    warning:'#f59e0b'
+  };
+  const bg=colors[type]||colors.info;
+  toast.style.cssText='position:fixed;top:calc(20px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%) translateY(-20px);background:'+bg+';color:white;padding:12px 20px;border-radius:14px;font-size:13px;font-weight:600;box-shadow:0 8px 24px rgba(4,10,30,0.25);z-index:10001;opacity:0;transition:all .25s cubic-bezier(.34,1.56,.64,1);max-width:calc(100vw - 32px);text-align:center;font-family:\'Nunito\',sans-serif';
+  toast.textContent=msg;
+  document.body.appendChild(toast);
+  requestAnimationFrame(()=>{ toast.style.opacity='1'; toast.style.transform='translateX(-50%) translateY(0)'; });
+  // Vibrate on mobile for errors/success
+  if(navigator.vibrate && (type==='success'||type==='error')){
+    try{ navigator.vibrate(type==='error'?[40,40,40]:[20]); }catch(e){}
+  }
+  setTimeout(()=>{
+    toast.style.opacity='0'; toast.style.transform='translateX(-50%) translateY(-20px)';
+    setTimeout(()=>toast.remove(), 300);
+  }, duration);
+}
+
+// ── NOTIFICATIONS & ALERTS ──────────────────────
+// Collect all active alerts: overdue tasks, today's interviews, upcoming deadlines, next actions
+function collectNotifications(){
+  const now = new Date();
+  const today = todayStr();
+  const tomorrow = new Date(now.getTime()+86400000).toISOString().slice(0,10);
+  const notifs = [];
+  // Today's interviews
+  candidates.forEach(c=>{
+    if(c.interviewDate === today){
+      notifs.push({id:'intv_'+c.id,type:'interview',priority:'high',icon:'📞',title:'Собеседование сегодня',subtitle:c.name+(c.position?' · '+c.position:''),action:()=>{closeNotifications();openCandidateDetail(c.id);},cal:{title:'Собеседование: '+c.name,start:c.interviewDate+'T10:00:00',duration:60,note:c.notes||''}});
+    }
+    if(c.interviewDate === tomorrow){
+      notifs.push({id:'intv_tom_'+c.id,type:'interview',priority:'medium',icon:'📅',title:'Собеседование завтра',subtitle:c.name+(c.position?' · '+c.position:''),action:()=>{closeNotifications();openCandidateDetail(c.id);},cal:{title:'Собеседование: '+c.name,start:c.interviewDate+'T10:00:00',duration:60,note:c.notes||''}});
+    }
+    if(c.nextAction && c.nextAction <= today && c.status!=='rejected' && c.status!=='hired'){
+      notifs.push({id:'na_'+c.id,type:'nextaction',priority:c.nextAction<today?'high':'medium',icon:c.nextAction<today?'⚠️':'📌',title:c.nextAction<today?'Просрочено':'Следующий шаг',subtitle:c.name+' — '+fmtDate(c.nextAction),action:()=>{closeNotifications();openCandidateDetail(c.id);}});
+    }
+  });
+  // Overdue tasks
+  tasks.forEach(t=>{
+    if(!t.done && t.dueDate){
+      if(t.dueDate < today){
+        notifs.push({id:'task_ov_'+t.id,type:'task',priority:'high',icon:'🔴',title:'Просроченная задача',subtitle:t.title,action:()=>{closeNotifications();openTaskDetail(t.id);},cal:{title:t.title,start:t.dueDate+'T09:00:00',duration:30,note:t.note||''}});
+      } else if(t.dueDate === today){
+        notifs.push({id:'task_t_'+t.id,type:'task',priority:t.priority==='high'?'high':'medium',icon:t.priority==='high'?'🔥':'⏰',title:'Задача сегодня',subtitle:t.title,action:()=>{closeNotifications();openTaskDetail(t.id);},cal:{title:t.title,start:t.dueDate+'T09:00:00',duration:30,note:t.note||''}});
+      } else if(t.dueDate === tomorrow){
+        notifs.push({id:'task_tom_'+t.id,type:'task',priority:'low',icon:'📅',title:'Задача завтра',subtitle:t.title,action:()=>{closeNotifications();openTaskDetail(t.id);},cal:{title:t.title,start:t.dueDate+'T09:00:00',duration:30,note:t.note||''}});
+      }
+    }
+  });
+  // Vacancy deadlines
+  vacancies.forEach(v=>{
+    if(v.status==='open' && v.deadline){
+      if(v.deadline < today){
+        notifs.push({id:'vac_ov_'+v.id,type:'vacancy',priority:'high',icon:'⏳',title:'Вакансия просрочена',subtitle:v.title,action:()=>{closeNotifications();switchTab(2);}});
+      } else if(v.deadline === today || v.deadline === tomorrow){
+        notifs.push({id:'vac_soon_'+v.id,type:'vacancy',priority:'medium',icon:'⏰',title:'Дедлайн вакансии',subtitle:v.title+' — '+fmtDate(v.deadline),action:()=>{closeNotifications();switchTab(2);}});
+      }
+    }
+  });
+  // Sort: high > medium > low
+  const rank = {high:0,medium:1,low:2};
+  notifs.sort((a,b)=>rank[a.priority]-rank[b.priority]);
+  return notifs;
+}
+function updateNotifBadge(){
+  const notifs = collectNotifications();
+  const badge = document.getElementById('notif-badge');
+  if(!badge) return;
+  const highCount = notifs.filter(n=>n.priority==='high').length;
+  const total = notifs.length;
+  if(total>0){
+    badge.style.display='flex';
+    badge.textContent = total>99?'99+':total;
+    badge.style.background = highCount>0 ? '#ef4444' : '#1e7de8';
+    badge.style.boxShadow = '0 0 0 1.5px '+(highCount>0?'#ef4444':'#1e7de8');
+  } else {
+    badge.style.display='none';
+  }
+}
+// Notification center modal
+var _notifOpen = false;
+function openNotifications(){
+  if(_notifOpen) return;
+  _notifOpen = true;
+  const notifs = collectNotifications();
+  const overlay = document.createElement('div');
+  overlay.id = 'notif-overlay';
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(4,10,30,0.45);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:10002;display:flex;flex-direction:column;padding-top:calc(10px + env(safe-area-inset-top,0px))';
+  let inner = '<div style="margin:0 12px;background:white;border-radius:18px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(4,10,30,0.3)">';
+  inner += '<div style="display:flex;align-items:center;padding:14px 16px;border-bottom:1px solid #eef2f7"><div style="flex:1;font-size:16px;font-weight:800">🔔 Уведомления</div><button onclick="closeNotifications()" style="background:#f0f4fa;border:none;width:34px;height:34px;border-radius:50%;font-size:15px;font-weight:700;color:#6b87b0;cursor:pointer">✕</button></div>';
+  inner += '<div style="overflow-y:auto;flex:1;padding:8px 10px;-webkit-overflow-scrolling:touch">';
+  if(notifs.length===0){
+    inner += '<div style="text-align:center;padding:36px 16px"><div style="font-size:40px">🎉</div><div style="margin-top:10px;color:#6b87b0;font-size:14px;font-weight:600">Всё под контролем!</div><div style="font-size:12px;color:#8a9ab5;margin-top:4px">Нет срочных уведомлений</div></div>';
+  } else {
+    notifs.forEach(n=>{
+      const bg = n.priority==='high' ? 'linear-gradient(135deg,#fef2f2,#fff)' : n.priority==='medium' ? 'linear-gradient(135deg,#fff4e6,#fff)' : '#f8fafc';
+      const border = n.priority==='high' ? '#fca5a5' : n.priority==='medium' ? '#fbbf24' : '#e0eaf5';
+      inner += '<div class="notif-item" data-id="'+n.id+'" style="display:flex;align-items:center;gap:10px;padding:12px;margin:6px 0;background:'+bg+';border:1px solid '+border+';border-radius:12px;cursor:pointer">';
+      inner += '<div style="font-size:22px;flex-shrink:0">'+n.icon+'</div>';
+      inner += '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:#223">'+n.title+'</div><div style="font-size:11px;color:#6b87b0;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+n.subtitle+'</div></div>';
+      if(n.cal){
+        inner += '<button class="notif-cal-btn" data-id="'+n.id+'" style="background:#1e7de8;color:white;border:none;border-radius:10px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;flex-shrink:0" title="Добавить в Календарь">📅</button>';
+      }
+      inner += '</div>';
+    });
+  }
+  inner += '</div>';
+  inner += '<div style="padding:10px 14px;border-top:1px solid #eef2f7;display:flex;gap:8px;align-items:center"><div style="flex:1;font-size:11px;color:#6b87b0">📅 = добавить в Календарь (push-напоминание iOS)</div></div>';
+  inner += '</div>';
+  overlay.innerHTML = inner;
+  overlay.addEventListener('click',(e)=>{ if(e.target===overlay) closeNotifications(); });
+  document.body.appendChild(overlay);
+  // Bind handlers
+  setTimeout(()=>{
+    const cache = notifs.reduce((a,n)=>{a[n.id]=n;return a;},{});
+    overlay.querySelectorAll('.notif-item').forEach(el=>{
+      const id = el.getAttribute('data-id');
+      el.addEventListener('click',(e)=>{
+        if(e.target.closest('.notif-cal-btn')) return;
+        const n = cache[id];
+        if(n && n.action) n.action();
+      });
+    });
+    overlay.querySelectorAll('.notif-cal-btn').forEach(btn=>{
+      btn.addEventListener('click',(e)=>{
+        e.stopPropagation();
+        const id = btn.getAttribute('data-id');
+        const n = cache[id];
+        if(n && n.cal) exportICS(n.cal);
+      });
+    });
+  },0);
+}
+function closeNotifications(){
+  _notifOpen = false;
+  const o = document.getElementById('notif-overlay');
+  if(o) o.remove();
+}
+
+// iCal export — generates .ics file blob and triggers share/download
+// Native iOS Calendar opens .ics and schedules a real push notification
+function _icsEscape(s){ return (s||'').toString().replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\n/g,'\\n'); }
+function _icsDateStr(dateStr){
+  // dateStr is 'YYYY-MM-DDTHH:MM:SS' in local time
+  const d = new Date(dateStr);
+  const pad = n => (n<10?'0':'')+n;
+  return d.getUTCFullYear()+pad(d.getUTCMonth()+1)+pad(d.getUTCDate())+'T'+pad(d.getUTCHours())+pad(d.getUTCMinutes())+pad(d.getUTCSeconds())+'Z';
+}
+function exportICS(evt){
+  // evt: { title, start (ISO local string), duration (minutes), note }
+  const start = _icsDateStr(evt.start);
+  const endDate = new Date(evt.start);
+  endDate.setMinutes(endDate.getMinutes() + (evt.duration||30));
+  const end = _icsDateStr(endDate.toISOString().slice(0,19));
+  const uid = 'ischu-'+Date.now()+'-'+Math.random().toString(36).slice(2,8)+'@ischu-svishchu';
+  const stamp = _icsDateStr(new Date().toISOString().slice(0,19));
+  const ics = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Ischu-Svishchu//HR//RU',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    'UID:'+uid,
+    'DTSTAMP:'+stamp,
+    'DTSTART:'+start,
+    'DTEND:'+end,
+    'SUMMARY:'+_icsEscape(evt.title),
+    'DESCRIPTION:'+_icsEscape(evt.note||''),
+    'BEGIN:VALARM',
+    'ACTION:DISPLAY',
+    'DESCRIPTION:'+_icsEscape(evt.title),
+    'TRIGGER:-PT30M',
+    'END:VALARM',
+    'BEGIN:VALARM',
+    'ACTION:DISPLAY',
+    'DESCRIPTION:'+_icsEscape(evt.title),
+    'TRIGGER:-PT1H',
+    'END:VALARM',
+    'END:VEVENT',
+    'END:VCALENDAR'
+  ].join('\r\n');
+  const blob = new Blob([ics], {type:'text/calendar'});
+  const fileName = (evt.title||'event').replace(/[^\wА-Яа-я\-. ]/g,'').slice(0,60)+'.ics';
+  // Try Web Share API first (iOS Safari)
+  (async ()=>{
+    try{
+      if(typeof File!=='undefined' && navigator.canShare){
+        const fileObj = new File([blob], fileName, {type:'text/calendar'});
+        if(navigator.canShare({files:[fileObj]})){
+          await navigator.share({files:[fileObj], title:evt.title});
+          showToast('Откройте файл в Календаре — появится push-напоминание','success',5000);
+          return;
+        }
+      }
+    }catch(e){ if(e && e.name==='AbortError') return; }
+    // Fallback: regular download
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fileName; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 60000);
+    showToast('Файл сохранён. Откройте его в Календаре','info',4000);
+  })();
+}
+
+// Smart-add: returns promise that resolves when user decides (skip / replace-merge / keep-both)
+// Options:
+//   autoStrategy: 'skip'|'merge'|'both' — if set, decide automatically without modal
+// Resolves to { action: 'added'|'merged'|'skipped', candidate }
+function smartAddCandidate(newCand, opts){
+  return new Promise((resolve)=>{
+    newCand = migrateCandidate(newCand);
+    const dup = findDuplicate(newCand);
+    if(!dup){
+      candidates.push(newCand);
+      resolve({action:'added', candidate:newCand});
+      return;
+    }
+    if(opts && opts.autoStrategy){
+      if(opts.autoStrategy==='skip'){ resolve({action:'skipped', candidate:dup}); return; }
+      if(opts.autoStrategy==='merge'){ mergeCandidate(dup, newCand); resolve({action:'merged', candidate:dup}); return; }
+      if(opts.autoStrategy==='both'){
+        newCand.name = newCand.name+' (копия)';
+        candidates.push(newCand);
+        resolve({action:'added', candidate:newCand});
+        return;
+      }
+    }
+    // Interactive modal
+    const matchReason = [];
+    if(_norm(dup.name)===_norm(newCand.name)) matchReason.push('одинаковое имя');
+    const newPhones=(newCand.phones||[]).map(p=>_normPhone(p.value));
+    if((dup.phones||[]).some(p=>newPhones.includes(_normPhone(p.value)))) matchReason.push('совпадает телефон');
+    const newEmails=(newCand.emails||[]).map(e=>_normEmail(e.value));
+    if((dup.emails||[]).some(e=>newEmails.includes(_normEmail(e.value)))) matchReason.push('совпадает email');
+    let html = '<div style="font-size:13px;line-height:1.5">';
+    html += '<div style="padding:10px;background:#fff4e6;border-radius:10px;margin-bottom:10px;border-left:3px solid #f59e0b"><b>⚠️ Похоже на дубликат</b><div style="font-size:11px;color:#7a5000;margin-top:3px">Причина: '+matchReason.join(', ')+'</div></div>';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">';
+    html += '<div style="padding:8px;background:#f0f7ff;border-radius:10px"><div style="font-size:10px;color:#6b87b0;font-weight:700;margin-bottom:4px">СУЩЕСТВУЕТ</div><div style="font-weight:700">'+(dup.name||'—')+'</div><div style="font-size:11px;color:#6b87b0">'+(dup.position||'—')+(dup.company?' · '+dup.company:'')+'</div>';
+    if((dup.phones||[]).length) html += '<div style="font-size:11px;margin-top:2px">📞 '+dup.phones[0].value+'</div>';
+    if((dup.emails||[]).length) html += '<div style="font-size:11px">✉️ '+dup.emails[0].value+'</div>';
+    html += '</div>';
+    html += '<div style="padding:8px;background:#e8f4ff;border-radius:10px;border:1.5px solid #1e7de8"><div style="font-size:10px;color:#1e7de8;font-weight:700;margin-bottom:4px">НОВЫЙ</div><div style="font-weight:700">'+(newCand.name||'—')+'</div><div style="font-size:11px;color:#6b87b0">'+(newCand.position||'—')+(newCand.company?' · '+newCand.company:'')+'</div>';
+    if((newCand.phones||[]).length) html += '<div style="font-size:11px;margin-top:2px">📞 '+newCand.phones[0].value+'</div>';
+    if((newCand.emails||[]).length) html += '<div style="font-size:11px">✉️ '+newCand.emails[0].value+'</div>';
+    html += '</div></div>';
+    html += '</div>';
+    showModal('🔍 Найден дубликат', html, [
+      { text:'🔄 Обновить существующий', cls:'primary', action:function(){
+        mergeCandidate(dup, newCand);
+        closeModal();
+        resolve({action:'merged', candidate:dup});
+      }},
+      { text:'➕ Сохранить как новый', action:function(){
+        newCand.name = newCand.name+' (копия)';
+        candidates.push(newCand);
+        closeModal();
+        resolve({action:'added', candidate:newCand});
+      }},
+      { text:'⏭ Пропустить', action:function(){
+        closeModal();
+        resolve({action:'skipped', candidate:dup});
+      }}
+    ]);
+  });
+}
 
 // ── SEED DATA ──
 function seedData(){
@@ -551,13 +974,52 @@ function fabAction(){[null,openAddCandidate,openAddVacancy,openAddCalEvent,openA
 function openSheet(html){
   document.getElementById('sheet-content').innerHTML=html;
   document.getElementById('sheet-backdrop').classList.add('open');
-  document.getElementById('bottom-sheet').classList.add('open');
+  const sheet=document.getElementById('bottom-sheet');
+  sheet.classList.add('open');
+  sheet.style.transform='';
 }
 function closeSheet(){
   document.getElementById('sheet-backdrop').classList.remove('open');
-  document.getElementById('bottom-sheet').classList.remove('open');
+  const sheet=document.getElementById('bottom-sheet');
+  sheet.classList.remove('open');
+  sheet.style.transform='';
   setTimeout(()=>{document.getElementById('sheet-content').innerHTML=''},300);
 }
+// Swipe-down-to-close gesture on sheet grip
+(function setupSheetSwipe(){
+  const grip=document.getElementById('sheet-grip');
+  const sheet=document.getElementById('bottom-sheet');
+  if(!grip||!sheet) return;
+  let startY=0, currentY=0, dragging=false;
+  function onStart(e){
+    const t=e.touches?e.touches[0]:e;
+    startY=t.clientY; currentY=startY; dragging=true;
+    sheet.classList.add('dragging');
+  }
+  function onMove(e){
+    if(!dragging) return;
+    const t=e.touches?e.touches[0]:e;
+    currentY=t.clientY;
+    const dy=Math.max(0,currentY-startY);
+    sheet.style.transform='translateX(-50%) translateY('+dy+'px)';
+    if(dy>5 && e.cancelable) e.preventDefault();
+  }
+  function onEnd(){
+    if(!dragging) return;
+    dragging=false;
+    sheet.classList.remove('dragging');
+    const dy=currentY-startY;
+    if(dy>80){ closeSheet(); }
+    else { sheet.style.transform=''; }
+  }
+  grip.addEventListener('touchstart',onStart,{passive:true});
+  grip.addEventListener('touchmove',onMove,{passive:false});
+  grip.addEventListener('touchend',onEnd);
+  grip.addEventListener('touchcancel',onEnd);
+  grip.addEventListener('mousedown',onStart);
+  document.addEventListener('mousemove',onMove);
+  document.addEventListener('mouseup',onEnd);
+})();
 
 // ── SCREEN 0: DASHBOARD ──
 function renderDashboard(){
@@ -832,9 +1294,14 @@ function saveCandForm(id){
   const emails=em?[{type:'work',value:em}]:[];
   const socials=tg?[{type:'Telegram',value:tg}]:[];
   const data={name,position:document.getElementById('cf-pos').value.trim(),company:document.getElementById('cf-co').value.trim(),status:document.getElementById('cf-st').value,vacancy:document.getElementById('cf-vac').value,source:document.getElementById('cf-src').value,rating:_stars,salaryMin:parseInt(document.getElementById('cf-s1').value)||0,salaryMax:parseInt(document.getElementById('cf-s2').value)||0,interviewDate:document.getElementById('cf-id').value,nextAction:document.getElementById('cf-nd').value,notes:document.getElementById('cf-no').value.trim(),phones,emails,socials,photo:(typeof pendingCandPhoto!=='undefined'&&pendingCandPhoto)?pendingCandPhoto:(id&&candidates.find(x=>x.id===id)?candidates.find(x=>x.id===id).photo:null)};
-  if(id){const c=candidates.find(x=>x.id===id);Object.assign(c,data);addLog(c,'Данные обновлены');}
-  else candidates.push({id:genId(),...data,files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Кандидат добавлен',type:'note'}]});
-  pendingCandPhoto=null;saveData();closeSheet();renderScreen(currentTab);
+  if(id){const c=candidates.find(x=>x.id===id);Object.assign(c,data);addLog(c,'Данные обновлены');pendingCandPhoto=null;saveData();closeSheet();renderScreen(currentTab);return;}
+  // New candidate — check for duplicates
+  const newCand={id:genId(),...data,files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Кандидат добавлен',type:'note'}]};
+  smartAddCandidate(newCand).then(function(res){
+    pendingCandPhoto=null;saveData();closeSheet();renderScreen(currentTab);
+    if(res.action==='merged' && typeof showToast==='function') showToast('Данные объединены с существующим кандидатом','info');
+    else if(res.action==='skipped' && typeof showToast==='function') showToast('Пропущен — дубликат','info');
+  });
 }
 
 // ── SCREEN 2: VACANCIES ──
@@ -1206,20 +1673,18 @@ function smartParseText(){
   const txt=document.getElementById('imp-txt').value.trim();
   if(!txt){alert('Вставьте текст');return;}
   const lines=txt.split('\n').filter(l=>l.trim());
-  let imported=0;
   const phoneRe=/(\+?\d[\d\s\-()]{7,}\d)/g;
   const emailRe=/([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})/g;
   const tgRe=/@([a-zA-Z0-9_]{3,})/g;
+  const pending=[];
   lines.forEach(line=>{
     const phones=(line.match(phoneRe)||[]).map(p=>p.replace(/[\s\-()]/g,''));
     const emails=line.match(emailRe)||[];
     const tgs=line.match(tgRe)||[];
-    // Remove found items to isolate name/position
     let clean=line;
     phones.forEach(p=>clean=clean.replace(p,''));
     emails.forEach(e=>clean=clean.replace(e,''));
     tgs.forEach(t=>clean=clean.replace(t,''));
-    // Split remaining by common delimiters
     const parts=clean.split(/[,;—\-–|\/]/).map(s=>s.trim()).filter(s=>s.length>1);
     let name='',position='',company='';
     if(parts.length>=3){name=parts[0];position=parts[1];company=parts[2];}
@@ -1227,48 +1692,158 @@ function smartParseText(){
     else if(parts.length===1){name=parts[0];}
     else return;
     if(!name||name.length<2)return;
-    const cPhones=phones.map(p=>({type:'mobile',value:p}));
-    const cEmails=emails.map(e=>({type:'work',value:e}));
-    const cSocials=tgs.map(t=>({type:'Telegram',value:t}));
-    candidates.push({id:genId(),name,position,company,status:'new',source:'other',vacancy:'',rating:3,salaryMin:0,salaryMax:0,interviewDate:'',nextAction:'',phones:cPhones,emails:cEmails,socials:cSocials,notes:'',files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Импорт из текста',type:'note'}]});
-    imported++;
+    pending.push({id:genId(),name,position,company,status:'new',source:'other',vacancy:'',rating:3,salaryMin:0,salaryMax:0,interviewDate:'',nextAction:'',phones:phones.map(p=>({type:'mobile',value:p})),emails:emails.map(e=>({type:'work',value:e})),socials:tgs.map(t=>({type:'Telegram',value:t})),notes:'',files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Импорт из текста',type:'note'}]});
   });
-  saveData();closeSheet();renderScreen(currentTab);
-  alert('Распознано и импортировано: '+imported);
+  if(!pending.length){ showToast('Не удалось распознать контакты','info'); return; }
+  askDedupeStrategy('Импорт из текста ('+pending.length+' контактов)').then(function(strategy){
+    if(strategy===null) return;
+    let added=0,merged=0,skipped=0;
+    const proms=pending.map(nc=>smartAddCandidate(nc,{autoStrategy:strategy}).then(r=>{
+      if(r.action==='added') added++;
+      else if(r.action==='merged') merged++;
+      else skipped++;
+    }));
+    Promise.all(proms).then(()=>{
+      saveData();closeSheet();renderScreen(currentTab);
+      showToast('Импорт: +'+added+' новых, '+merged+' обновлено'+(skipped?', '+skipped+' пропущено':''),'success',5000);
+    });
+  });
 }
 
-// vCard parser
+// vCard parser — handles iPhone Contacts export quirks
 let vcardContacts=[];
+// Unfold vCard line continuations: lines starting with space or tab belong to previous
+function _vcardUnfold(txt){
+  const lines = txt.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n');
+  const out = [];
+  lines.forEach(ln=>{
+    if(ln.length>0 && (ln[0]===' '||ln[0]==='\t')){
+      if(out.length) out[out.length-1] += ln.slice(1);
+    } else {
+      out.push(ln);
+    }
+  });
+  return out;
+}
+// Parse vCard "PROP;PARAMS:VALUE" → {prop, params, value}
+function _vcardParseLine(line){
+  const colonIdx = line.indexOf(':');
+  if(colonIdx<0) return null;
+  const head = line.slice(0,colonIdx);
+  const value = line.slice(colonIdx+1);
+  const parts = head.split(';');
+  const prop = (parts[0]||'').toUpperCase();
+  const params = {};
+  for(let i=1;i<parts.length;i++){
+    const p = parts[i];
+    const eqIdx = p.indexOf('=');
+    if(eqIdx>=0){ params[p.slice(0,eqIdx).toUpperCase()] = p.slice(eqIdx+1); }
+    else { params[p.toUpperCase()] = true; }
+  }
+  return {prop, params, value};
+}
+function _vcardUnescape(v){ return (v||'').replace(/\\n/gi,' ').replace(/\\,/g,',').replace(/\\;/g,';').replace(/\\\\/g,'\\'); }
 function parseVCard(inp){
   const f=inp.files[0];if(!f)return;
   const r=new FileReader();
   r.onload=e=>{
     const txt=e.target.result;
     vcardContacts=[];
-    const cards=txt.split('BEGIN:VCARD').filter(c=>c.includes('END:VCARD'));
-    cards.forEach(card=>{
-      const fn=(card.match(/FN[;:](.+)/)||['',''])[1].trim();
-      const tel=(card.match(/TEL[^:]*:(.+)/g)||[]).map(t=>t.replace(/TEL[^:]*:/,'').trim());
-      const em=(card.match(/EMAIL[^:]*:(.+)/g)||[]).map(e=>e.replace(/EMAIL[^:]*:/,'').trim());
-      const org=(card.match(/ORG[;:](.+)/)||['',''])[1].replace(/;/g,' ').trim();
-      const title=(card.match(/TITLE[;:](.+)/)||['',''])[1].trim();
-      if(fn)vcardContacts.push({name:fn,phones:tel,emails:em,company:org,position:title});
+    const lines = _vcardUnfold(txt);
+    let cur=null;
+    let photoLines=null;
+    let photoMime=null;
+    lines.forEach(raw=>{
+      const L = raw;
+      if(/^BEGIN:VCARD/i.test(L)){ cur={name:'',phones:[],emails:[],company:'',position:'',note:'',telegram:'',photo:null}; photoLines=null; photoMime=null; return; }
+      if(/^END:VCARD/i.test(L)){
+        if(cur){
+          if(photoLines){
+            const mime = photoMime || 'image/jpeg';
+            cur.photo = 'data:'+mime+';base64,'+photoLines.replace(/\s/g,'');
+          }
+          if(cur.name) vcardContacts.push(cur);
+          cur=null;
+        }
+        return;
+      }
+      if(!cur) return;
+      // Continuation of PHOTO
+      if(photoLines!==null && !/^[A-Z][A-Z0-9-]*[;:]/i.test(L)){
+        photoLines += L.trim();
+        return;
+      } else if(photoLines!==null){
+        photoLines = null;
+      }
+      const parsed = _vcardParseLine(L);
+      if(!parsed) return;
+      const {prop, params, value} = parsed;
+      if(prop==='FN'){ cur.name = _vcardUnescape(value); }
+      else if(prop==='N' && !cur.name){
+        // N:Last;First;Middle;Prefix;Suffix → "First Last"
+        const p = value.split(';').map(s=>_vcardUnescape(s).trim());
+        const first = p[1]||'', last = p[0]||'';
+        cur.name = (first+' '+last).trim() || last || first;
+      }
+      else if(prop==='TEL'){ const v=_vcardUnescape(value).trim(); if(v && !cur.phones.includes(v)) cur.phones.push(v); }
+      else if(prop==='EMAIL'){ const v=_vcardUnescape(value).trim(); if(v && !cur.emails.includes(v)) cur.emails.push(v); }
+      else if(prop==='ORG'){ cur.company = _vcardUnescape(value).replace(/;/g,' ').trim(); }
+      else if(prop==='TITLE'){ cur.position = _vcardUnescape(value); }
+      else if(prop==='NOTE'){ cur.note = _vcardUnescape(value); }
+      else if(prop==='URL' || prop==='X-SOCIALPROFILE' || /SOCIALPROFILE/.test(prop)){
+        const v = _vcardUnescape(value);
+        if(/t\.me|telegram/i.test(v) && !cur.telegram){
+          const m = v.match(/t\.me\/([a-zA-Z0-9_]+)/);
+          cur.telegram = m ? ('@'+m[1]) : v;
+        }
+      }
+      else if(prop==='PHOTO'){
+        // Could be inline base64 or URI
+        if(params.ENCODING && /^(B|BASE64)$/i.test(params.ENCODING.toString())){
+          const typeParam = params.TYPE || params.JPEG || params.PNG;
+          photoMime = typeParam && typeof typeParam==='string' ? ('image/'+typeParam.toLowerCase()) : (params.JPEG?'image/jpeg':params.PNG?'image/png':'image/jpeg');
+          photoLines = value; // accumulate continuation lines
+        } else if(/^data:/.test(value)){
+          cur.photo = value;
+        } else if(value && value.length>50 && !/^https?:/.test(value)){
+          // iOS may omit ENCODING; assume base64
+          photoMime = 'image/jpeg'; photoLines = value;
+        }
+      }
     });
     const prev=document.getElementById('vcf-prev');
     const btn=document.getElementById('vcf-ok');
-    if(prev)prev.innerHTML=`<div style="font-size:13px;font-weight:600;margin-bottom:6px">Найдено: ${vcardContacts.length} контактов</div>`+vcardContacts.slice(0,5).map(c=>`<div class="file-item"><div class="file-item-icon">👤</div><div class="file-item-info"><div class="file-item-name">${c.name}</div><div class="file-item-size">${c.phones[0]||''} ${c.emails[0]||''}</div></div></div>`).join('')+(vcardContacts.length>5?`<div style="text-align:center;color:#6b87b0;font-size:12px;margin-top:6px">...ещё ${vcardContacts.length-5}</div>`:'');
+    if(prev){
+      prev.innerHTML=`<div style="font-size:13px;font-weight:600;margin-bottom:6px">Найдено: ${vcardContacts.length} контактов</div>`+vcardContacts.slice(0,5).map(c=>{
+        const photoHTML = c.photo ? `<img src="${c.photo}" style="width:28px;height:28px;border-radius:50%;object-fit:cover" alt="">` : '<div class="file-item-icon">👤</div>';
+        return `<div class="file-item">${photoHTML}<div class="file-item-info"><div class="file-item-name">${c.name}</div><div class="file-item-size">${c.phones[0]||''} ${c.emails[0]||''}</div></div></div>`;
+      }).join('')+(vcardContacts.length>5?`<div style="text-align:center;color:#6b87b0;font-size:12px;margin-top:6px">...ещё ${vcardContacts.length-5}</div>`:'');
+    }
     if(btn)btn.style.display='block';
   };
   r.readAsText(f,'UTF-8');
 }
 function confirmVCardImport(){
-  let n=0;
+  const __vcardPending=[];
   vcardContacts.forEach(vc=>{
     if(!vc.name)return;
-    candidates.push({id:genId(),name:vc.name,position:vc.position||'',company:vc.company||'',status:'new',source:'other',vacancy:'',rating:3,salaryMin:0,salaryMax:0,interviewDate:'',nextAction:'',phones:vc.phones.map(p=>({type:'mobile',value:p})),emails:vc.emails.map(e=>({type:'work',value:e})),socials:[],notes:'',photo:null,files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Импорт из vCard',type:'note'}]});
-    n++;
+    const socials = vc.telegram ? [{type:'Telegram',value:vc.telegram}] : [];
+    __vcardPending.push({id:genId(),name:vc.name,position:vc.position||'',company:vc.company||'',status:'new',source:'other',vacancy:'',rating:3,salaryMin:0,salaryMax:0,interviewDate:'',nextAction:'',phones:vc.phones.map(p=>({type:'mobile',value:p})),emails:vc.emails.map(e=>({type:'work',value:e})),socials:socials,notes:vc.note||'',photo:vc.photo||null,files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Импорт из vCard (iPhone)',type:'note'}]});
   });
-  saveData();closeSheet();renderScreen(currentTab);alert('Импортировано: '+n);
+  if(!__vcardPending.length){ showToast('Нет контактов для импорта','info'); return; }
+  askDedupeStrategy('vCard-импорт ('+__vcardPending.length+' контактов)').then(function(strategy){
+    if(strategy===null){ return; }
+    let added=0, merged=0, skipped=0;
+    const proms=__vcardPending.map(nc=>smartAddCandidate(nc,{autoStrategy:strategy}).then(r=>{
+      if(r.action==='added') added++;
+      else if(r.action==='merged') merged++;
+      else skipped++;
+    }));
+    Promise.all(proms).then(()=>{
+      saveData();closeSheet();renderScreen(currentTab);
+      showToast('vCard импорт: +'+added+' новых, '+merged+' обновлено, '+skipped+' пропущено','success',5000);
+    });
+  });
 }
 
 
@@ -1458,13 +2033,25 @@ function previewImport(inp){
   r.readAsText(f,'UTF-8');
 }
 function confirmImport(){
-  let n=0;
-  importRows.forEach(row=>{
-    if(!row.name)return;
-    candidates.push({id:genId(),name:row.name,position:row.position||'',company:row.company||'',status:row.status||'new',source:row.source||'other',vacancy:'',rating:3,salaryMin:0,salaryMax:0,interviewDate:'',nextAction:'',phones:row.phone?[{type:'mobile',value:row.phone}]:[],emails:row.email?[{type:'work',value:row.email}]:[],socials:[],notes:'',photo:null,files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Импортирован из CSV',type:'note'}]});
-    n++;
+  // CSV/TSV bulk import — ask once what to do with duplicates, then apply to all
+  askDedupeStrategy('CSV-импорт').then(function(strategy){
+    if(strategy===null){ closeSheet(); return; }
+    let added=0, merged=0, skipped=0;
+    const tasks=[];
+    importRows.forEach(row=>{
+      if(!row.name)return;
+      const nc={id:genId(),name:row.name,position:row.position||'',company:row.company||'',status:row.status||'new',source:row.source||'other',vacancy:'',rating:3,salaryMin:0,salaryMax:0,interviewDate:'',nextAction:'',phones:row.phone?[{type:'mobile',value:row.phone}]:[],emails:row.email?[{type:'work',value:row.email}]:[],socials:[],notes:'',photo:null,files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Импортирован из CSV',type:'note'}]};
+      tasks.push(smartAddCandidate(nc,{autoStrategy:strategy}).then(r=>{
+        if(r.action==='added') added++;
+        else if(r.action==='merged') merged++;
+        else skipped++;
+      }));
+    });
+    Promise.all(tasks).then(()=>{
+      saveData();closeSheet();renderScreen(currentTab);
+      showToast('Импорт CSV: +'+added+' новых, '+merged+' обновлено, '+skipped+' пропущено','success',5000);
+    });
   });
-  saveData();closeSheet();renderScreen(currentTab);alert('Импортировано: '+n);
 }
 
 // ── INIT ──
@@ -1546,23 +2133,39 @@ async function aiSmartImport() {
     previewHTML += '</div>';
     
     showModal('🤖 AI нашёл ' + contacts.length + ' контактов', previewHTML, [
-      { text: 'Импортировать', cls: 'primary', action: function() {
-        contacts.forEach(function(c) {
-          if (c.name) {
-            const id = 'c_' + Date.now() + '_' + Math.random().toString(36).substr(2,5);
-            const cand = {
-              id: id, name: c.name, phone: c.phone || '', email: c.email || '',
-              telegram: c.telegram || '', status: 'Новый',
-              photo:null, notes: [c.position, c.company, c.notes].filter(Boolean).join('; '),
-              created: new Date().toISOString().split('T')[0]
-            };
-            candidates.push(cand);
-          }
-        });
-        saveCandidates();
+      { text: 'Импортировать', cls: 'primary', action: async function() {
+        closeModal();
+        let strategy=null;
+        if(contacts.length>1){
+          strategy = await askDedupeStrategy('AI импорт из текста');
+          if(strategy===null) return;
+        }
+        let added=0,merged=0,skipped=0;
+        const createdIds=[];
+        for(const c of contacts){
+          if(!c.name) continue;
+          const newCand = {
+            id: genId(), name: c.name, position: c.position||'', company: c.company||'',
+            status: 'new', source: c.source||'other', vacancy: '', rating: 3, salaryMin: 0, salaryMax: 0,
+            interviewDate: '', nextAction: '',
+            phones: c.phone ? [{type:'mobile',value:c.phone}] : [],
+            emails: c.email ? [{type:'work',value:c.email}] : [],
+            socials: c.telegram ? [{type:'Telegram',value:c.telegram}] : [],
+            photo: null,
+            notes: [c.notes, c.company ? 'Компания: '+c.company : ''].filter(Boolean).join('; '),
+            files: [], created: todayStr(),
+            activityLog: [{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'AI импорт из текста',type:'note'}]
+          };
+          const res = await smartAddCandidate(newCand, strategy?{autoStrategy:strategy}:null);
+          if(res.action==='added'){ createdIds.push(res.candidate.id); added++; }
+          else if(res.action==='merged'){ merged++; }
+          else skipped++;
+        }
+        saveData();
         renderCandidates();
         closeModal();
-        closeModal();
+        showToast('AI импорт: +'+added+' новых, '+merged+' обновлено'+(skipped?', '+skipped+' пропущено':''),'success',5000);
+        if(createdIds.length>0) setTimeout(()=>openCandidateDetail(createdIds[0]),150);
       }},
       { text: 'Отмена', action: function() { closeModal(); }}
     ]);
@@ -1945,39 +2548,48 @@ async function aiFileImport() {
     previewHTML += '</div>';
 
     showModal('🤖 Найдено ' + contacts.length + ' контактов из файла', previewHTML, [
-      { text: 'Импортировать все', cls: 'primary', action: function() {
+      { text: 'Импортировать все', cls: 'primary', action: async function() {
+        closeModal();
         const createdIds = [];
-        contacts.forEach(function(c, idx) {
-          if (c.name) {
-            const newId = genId();
-            // Each imported candidate gets a fresh copy of the attached file (unique file id per candidate)
-            const fileForThis = attachedFile ? [{
-              id: genId(), name: attachedFile.name, size: attachedFile.size,
-              type: attachedFile.type, data: attachedFile.data, added: attachedFile.added
-            }] : [];
-            candidates.push({
-              id: newId, name: c.name, position: c.position||'', company: c.company||'',
-              status: 'new', source: c.source||'other', vacancy: '', rating: 3, salaryMin: 0, salaryMax: 0,
-              interviewDate: '', nextAction: '',
-              phones: c.phone ? [{type:'mobile',value:c.phone}] : [],
-              emails: c.email ? [{type:'work',value:c.email}] : [],
-              socials: c.telegram ? [{type:'Telegram',value:c.telegram}] : [],
-              photo: (idx===0 ? extractedPhoto : null),
-              notes: [c.notes, c.company ? 'Компания: '+c.company : ''].filter(Boolean).join('; '),
-              files: fileForThis,
-              created: todayStr(),
-              activityLog: [{
-                id:genId(),
-                date:new Date().toISOString().slice(0,16).replace('T',' '),
-                text:'AI импорт из файла: '+fname+(fileForThis.length?' (файл прикреплён)':''),
-                type:'note'
-              }]
-            });
-            createdIds.push(newId);
-          }
-        });
+        let addedCount=0, mergedCount=0, skippedCount=0;
+        // For single-contact files (common), use interactive dedupe. For multi, ask strategy once.
+        let strategy = null;
+        if (contacts.length > 1) {
+          strategy = await askDedupeStrategy('AI импорт из файла');
+          if (strategy === null) return;
+        }
+        for (let idx=0; idx<contacts.length; idx++) {
+          const c = contacts[idx];
+          if (!c.name) continue;
+          const fileForThis = attachedFile ? [{
+            id: genId(), name: attachedFile.name, size: attachedFile.size,
+            type: attachedFile.type, data: attachedFile.data, added: attachedFile.added
+          }] : [];
+          const newCand = {
+            id: genId(), name: c.name, position: c.position||'', company: c.company||'',
+            status: 'new', source: c.source||'other', vacancy: '', rating: 3, salaryMin: 0, salaryMax: 0,
+            interviewDate: '', nextAction: '',
+            phones: c.phone ? [{type:'mobile',value:c.phone}] : [],
+            emails: c.email ? [{type:'work',value:c.email}] : [],
+            socials: c.telegram ? [{type:'Telegram',value:c.telegram}] : [],
+            photo: (idx===0 ? extractedPhoto : null),
+            notes: [c.notes, c.company ? 'Компания: '+c.company : ''].filter(Boolean).join('; '),
+            files: fileForThis,
+            created: todayStr(),
+            activityLog: [{
+              id:genId(),
+              date:new Date().toISOString().slice(0,16).replace('T',' '),
+              text:'AI импорт из файла: '+fname+(fileForThis.length?' (файл прикреплён)':''),
+              type:'note'
+            }]
+          };
+          const res = await smartAddCandidate(newCand, strategy ? {autoStrategy:strategy} : null);
+          if (res.action==='added') { createdIds.push(res.candidate.id); addedCount++; }
+          else if (res.action==='merged') { createdIds.push(res.candidate.id); mergedCount++; }
+          else skippedCount++;
+        }
         saveData(); renderCandidates();
-        closeModal(); closeModal();
+        closeModal();
         // Reset file input state
         pendingAIFile = null;
         const nameDiv = document.getElementById('ai-file-name');
@@ -1986,9 +2598,12 @@ async function aiFileImport() {
         if (nameDiv) { nameDiv.style.display='none'; nameDiv.textContent=''; }
         if (selBtn) { selBtn.style.display='none'; }
         if (fileInput) { fileInput.value=''; }
-        // Open the first imported candidate's card
+        if (addedCount+mergedCount>0 && typeof showToast==='function') {
+          showToast('Импорт: +'+addedCount+' новых, '+mergedCount+' обновлено'+(skippedCount?', '+skippedCount+' пропущено':''),'success',5000);
+        }
+        // Open the first imported/merged candidate's card
         if (createdIds.length > 0) {
-          setTimeout(function(){ openCandidateDetail(createdIds[0]); }, 100);
+          setTimeout(function(){ openCandidateDetail(createdIds[0]); }, 150);
         }
       }},
       { text: 'Отмена', action: function() { closeModal(); }}
@@ -2033,30 +2648,81 @@ async function aiComposeMessage(candId) {
   if (!isAIConfigured()) { showAISettings(); return; }
   const cand = candidates.find(c => c.id === candId);
   if (!cand) return;
-  
+  const vac = vacancies.find(v=>v.id===cand.vacancy);
+
   showModal('🤖 Генерация', '<div style="text-align:center;padding:20px"><div style="font-size:24px">⏳</div><div style="margin-top:8px;color:#666">AI составляет сообщение...</div></div>', []);
-  
+
   try {
     const result = await callAI('compose_message', {
-      name: cand.name, position: cand.position, company: cand.company, notes: cand.notes
+      candidate: {
+        name: cand.name, position: cand.position, company: cand.company, notes: cand.notes,
+        status: STATUSES[cand.status]||cand.status
+      },
+      vacancy: vac ? (vac.title+(vac.dept?', '+vac.dept:'')+(vac.requirements?' — '+vac.requirements:'')) : 'general recruitment'
     });
-    
+
+    // Normalize response shape — server prompt asks for email{subject,body}, telegram
+    const emailObj = result.email || {};
+    const subject = emailObj.subject || result.subject || '';
+    const body = emailObj.body || result.message || result.body || '';
+    const tg = result.telegram || result.telegram_short || '';
+
+    const cEmail = (cand.emails||[])[0]?cand.emails[0].value:'';
+    const cTgSoc = (cand.socials||[]).find(s=>s.type==='Telegram');
+    const cTgHandle = cTgSoc ? cTgSoc.value : '';
+    const cPhone = (cand.phones||[])[0]?cand.phones[0].value:'';
+
     let html = '<div style="font-size:13px">';
-    if (result.subject) html += '<div style="margin-bottom:8px"><b>Тема:</b> ' + result.subject + '</div>';
-    if (result.message) html += '<div style="white-space:pre-wrap;background:#f8f9fa;padding:12px;border-radius:8px;border:1px solid #e8e8e8;line-height:1.5">' + result.message + '</div>';
-    if (result.telegram_short) html += '<div style="margin-top:10px"><b>Короткое (Telegram):</b><div style="background:#f0f7ff;padding:10px;border-radius:8px;margin-top:4px">' + result.telegram_short + '</div></div>';
+    if(body){
+      html += '<div style="margin-bottom:10px"><div style="font-weight:700;margin-bottom:4px;color:#1e7de8">✉️ Email</div>';
+      if(subject) html += '<div style="margin-bottom:6px;font-size:12px"><span style="color:#6b87b0">Тема:</span> <b>'+_escAttr(subject)+'</b></div>';
+      html += '<textarea id="ai-email-body" style="width:100%;min-height:140px;padding:10px;border:1px solid #d0e4ff;border-radius:10px;font-family:inherit;font-size:12px;background:#f8fbff;resize:vertical">'+body+'</textarea>';
+      html += '</div>';
+    }
+    if(tg){
+      html += '<div><div style="font-weight:700;margin-bottom:4px;color:#0088cc">✈️ Telegram</div>';
+      html += '<textarea id="ai-tg-body" style="width:100%;min-height:80px;padding:10px;border:1px solid #d0e4ff;border-radius:10px;font-family:inherit;font-size:12px;background:#f0f7ff;resize:vertical">'+tg+'</textarea>';
+      html += '</div>';
+    }
     html += '</div>';
-    
+
+    const buttons = [];
+    if(body && cEmail){
+      buttons.push({ text:'📧 Отправить Email', cls:'primary', action:function(){
+        const b = (document.getElementById('ai-email-body')||{}).value || body;
+        const mailto = 'mailto:'+encodeURIComponent(cEmail)+'?subject='+encodeURIComponent(subject||'')+'&body='+encodeURIComponent(b);
+        window.location.href = mailto;
+        addLog(cand,'Отправлен email через AI: '+subject,'note');
+        saveData();
+        closeModal();
+      }});
+    }
+    if(tg && cTgHandle){
+      buttons.push({ text:'✈️ Открыть Telegram', action:function(){
+        const b = (document.getElementById('ai-tg-body')||{}).value || tg;
+        const handle = cTgHandle.replace(/^@/,'');
+        // iOS: t.me deep link
+        const url = 'https://t.me/'+handle+'?text='+encodeURIComponent(b);
+        window.open(url,'_blank');
+        addLog(cand,'Сообщение Telegram через AI','note');
+        saveData();
+        closeModal();
+      }});
+    }
+    buttons.push({ text:'📋 Копировать', action:function(){
+      const b = body || tg || '';
+      const ta = document.getElementById('ai-email-body') || document.getElementById('ai-tg-body');
+      const text = ta ? ta.value : b;
+      if(navigator.clipboard){ navigator.clipboard.writeText(text).then(()=>showToast('Скопировано','success')); }
+      else { showToast('Буфер обмена недоступен','error'); }
+    }});
+    buttons.push({ text:'Закрыть', action:function(){ closeModal(); }});
+
     closeModal();
-    showModal('✉️ Сообщение для ' + cand.name, html, [
-      { text: 'Копировать', cls: 'primary', action: function() {
-        navigator.clipboard.writeText(result.message || result.telegram_short || '');
-        alert('Скопировано!');
-      }},
-      { text: 'Закрыть', action: function() { closeModal(); }}
-    ]);
-  } catch(err) { closeModal(); alert('Ошибка: ' + err.message); }
+    showModal('✉️ Сообщение для '+cand.name, html, buttons);
+  } catch(err) { closeModal(); showToast('Ошибка AI: '+err.message,'error',5000); }
 }
+function _escAttr(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 
 // ─── AI DUPLICATE CHECK ──────────────────────
 async function aiCheckDuplicates() {
