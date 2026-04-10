@@ -38,17 +38,22 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
 .header-sub{font-size:10px;color:rgba(255,255,255,0.65);font-weight:500}
 .header-actions{display:flex;gap:6px}
 .header-btn{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);color:white;border-radius:20px;padding:5px 10px;font-size:12px;font-family:'Nunito',sans-serif;font-weight:600;cursor:pointer;white-space:nowrap}
-/* TABS */
-#tab-strip{background:white;display:flex;overflow-x:auto;border-bottom:1px solid #d6e8ff;flex-shrink:0;scrollbar-width:none}
+/* BOTTOM NAV BAR (iOS-style) */
+#tab-strip{position:fixed;bottom:0;left:0;right:0;background:rgba(255,255,255,0.96);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border-top:1px solid #e5ecf5;display:flex;justify-content:space-around;padding:6px 4px calc(6px + var(--safe-bottom));z-index:99;box-shadow:0 -2px 12px rgba(4,10,30,0.04)}
 #tab-strip::-webkit-scrollbar{display:none}
-.tab{flex-shrink:0;padding:0 14px;height:52px;display:flex;align-items:center;gap:5px;font-size:13px;font-weight:600;color:#6b87b0;cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;transition:all .2s}
-.tab.active{color:var(--blue);border-bottom-color:var(--blue)}
+.tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:6px 2px;color:#8a9ab5;font-size:10px;font-weight:600;cursor:pointer;position:relative;transition:all .18s;border-radius:12px;min-height:48px;font-family:'Nunito',sans-serif;white-space:nowrap;-webkit-tap-highlight-color:transparent}
+.tab .tab-ico{font-size:22px;line-height:1;filter:grayscale(40%) opacity(0.75);transition:filter .18s,transform .18s}
+.tab .tab-lbl{font-size:10px;font-weight:700;letter-spacing:0.1px}
+.tab:active{background:rgba(30,125,232,0.08)}
+.tab.active{color:var(--blue)}
+.tab.active .tab-ico{filter:none;transform:scale(1.08)}
+.tab.active::before{content:'';position:absolute;top:2px;left:50%;transform:translateX(-50%);width:5px;height:5px;border-radius:50%;background:linear-gradient(135deg,#1e7de8,#6c3cf0);box-shadow:0 0 8px rgba(30,125,232,0.6)}
 /* SCREENS */
 #screens{flex:1;overflow:hidden;position:relative}
-.screen{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;padding:16px 16px calc(80px + var(--safe-bottom));display:none;-webkit-overflow-scrolling:touch}
+.screen{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;padding:16px 16px calc(90px + var(--safe-bottom));display:none;-webkit-overflow-scrolling:touch}
 .screen.active{display:block}
 /* FAB */
-.fab{position:fixed;bottom:calc(20px + var(--safe-bottom));right:max(20px,(100vw - 430px)/2 + 20px);width:52px;height:52px;background:radial-gradient(circle at 40% 40%,#4a9af5,#1e7de8,#0a3a8a);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:26px;color:white;box-shadow:0 4px 16px rgba(30,125,232,.4);cursor:pointer;z-index:100;border:none;line-height:1}
+.fab{position:fixed;bottom:calc(78px + var(--safe-bottom));right:max(20px,(100vw - 430px)/2 + 20px);width:52px;height:52px;background:radial-gradient(circle at 40% 40%,#4a9af5,#1e7de8,#0a3a8a);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:26px;color:white;box-shadow:0 4px 16px rgba(30,125,232,.4);cursor:pointer;z-index:100;border:none;line-height:1}
 /* DASHBOARD */
 .tiles-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px}
 .tile{background:linear-gradient(135deg,#ffffff,#f5faff);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:4px;box-shadow:0 2px 12px rgba(30,125,232,.08);cursor:pointer;transition:transform .15s;border:1px solid rgba(30,125,232,.1)}
@@ -421,11 +426,11 @@ function showIntro(){
   </div>
 </header>
 <div id="tab-strip">
-  <div class="tab active" data-tab="0">🏠 Главная</div>
-  <div class="tab" data-tab="1">👥 Кандидаты</div>
-  <div class="tab" data-tab="2">💼 Вакансии</div>
-  <div class="tab" data-tab="3">📅 Календарь</div>
-  <div class="tab" data-tab="4">✅ Задачи</div>
+  <div class="tab active" data-tab="0"><span class="tab-ico">🏠</span><span class="tab-lbl">Главная</span></div>
+  <div class="tab" data-tab="1"><span class="tab-ico">👥</span><span class="tab-lbl">Кандидаты</span></div>
+  <div class="tab" data-tab="2"><span class="tab-ico">💼</span><span class="tab-lbl">Вакансии</span></div>
+  <div class="tab" data-tab="3"><span class="tab-ico">📅</span><span class="tab-lbl">Календарь</span></div>
+  <div class="tab" data-tab="4"><span class="tab-ico">✅</span><span class="tab-lbl">Задачи</span></div>
 </div>
 <div id="screens">
   <div class="screen active" id="screen-0"></div>
