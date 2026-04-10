@@ -683,6 +683,17 @@ function openCandidateDetail(id){
   const waUrl=waP?'https://wa.me/'+waP.value.replace(/\D/g,''):'#';
   const tgUrl=tg?(tg.value.startsWith('@')?'https://t.me/'+tg.value.slice(1):'https://t.me/'+tg.value.replace(/\D/g,'')):'#';
   const emailUrl=email?'mailto:'+email.value:'#';
+  // Pre-build files list HTML to avoid nested template literal escaping bugs
+  const filesList=(c.files||[]).map(f=>
+    '<div class="file-item">'+
+      '<div class="file-item-icon">'+fileIcon(f.name)+'</div>'+
+      '<div class="file-item-info" onclick="downloadCandFile(\''+c.id+'\',\''+f.id+'\')">'+
+        '<div class="file-item-name">'+f.name+'</div>'+
+        '<div class="file-item-size">'+fmtFileSize(f.size||0)+' · '+(f.added||'')+'</div>'+
+      '</div>'+
+      '<button class="file-del-btn" onclick="event.stopPropagation();deleteCandFile(\''+c.id+'\',\''+f.id+'\')">✕</button>'+
+    '</div>'
+  ).join('') || '<div style="font-size:12px;color:#6b87b0;padding:4px 0">Нет прикреплённых файлов</div>';
 
   openSheet(`
 <div class="detail-header">
@@ -719,14 +730,8 @@ ${(c.phones.length||c.emails.length||c.socials.length)?`
 </div>`:''}
 <div class="file-section">
   <div class="section-title" style="font-size:13px">📎 Файлы</div>
-  <div class="file-list">
-    \${(c.files||[]).map(f=>\`<div class="file-item">
-      <div class="file-item-icon">\${fileIcon(f.name)}</div>
-      <div class="file-item-info" onclick="downloadCandFile('\${c.id}','\${f.id}')"><div class="file-item-name">\${f.name}</div><div class="file-item-size">\${fmtFileSize(f.size)} · \${f.added||''}</div></div>
-      <button class="file-del-btn" onclick="event.stopPropagation();deleteCandFile('\${c.id}','\${f.id}')">✕</button>
-    </div>\`).join('')}
-  </div>
-  <button class="file-add-btn" onclick="openFileInput('\${c.id}')">📎 Прикрепить файл</button>
+  <div class="file-list">${filesList}</div>
+  <button class="file-add-btn" onclick="openFileInput('${c.id}')">📎 Прикрепить файл</button>
 </div>
 <div class="activity-log">
   <div class="section-title" style="font-size:13px">📋 Активность</div>
@@ -1820,10 +1825,17 @@ async function aiFileImport() {
 
     showModal('🤖 Найдено ' + contacts.length + ' контактов из файла', previewHTML, [
       { text: 'Импортировать все', cls: 'primary', action: function() {
+        const createdIds = [];
         contacts.forEach(function(c, idx) {
           if (c.name) {
+            const newId = genId();
+            // Each imported candidate gets a fresh copy of the attached file (unique file id per candidate)
+            const fileForThis = attachedFile ? [{
+              id: genId(), name: attachedFile.name, size: attachedFile.size,
+              type: attachedFile.type, data: attachedFile.data, added: attachedFile.added
+            }] : [];
             candidates.push({
-              id: genId(), name: c.name, position: c.position||'', company: c.company||'',
+              id: newId, name: c.name, position: c.position||'', company: c.company||'',
               status: 'new', source: c.source||'other', vacancy: '', rating: 3, salaryMin: 0, salaryMax: 0,
               interviewDate: '', nextAction: '',
               phones: c.phone ? [{type:'mobile',value:c.phone}] : [],
@@ -1831,13 +1843,32 @@ async function aiFileImport() {
               socials: c.telegram ? [{type:'Telegram',value:c.telegram}] : [],
               photo: (idx===0 ? extractedPhoto : null),
               notes: [c.notes, c.company ? 'Компания: '+c.company : ''].filter(Boolean).join('; '),
-              files: (idx===0 && attachedFile) ? [attachedFile] : [],
+              files: fileForThis,
               created: todayStr(),
-              activityLog: [{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'AI импорт из файла: '+fname,type:'note'}]
+              activityLog: [{
+                id:genId(),
+                date:new Date().toISOString().slice(0,16).replace('T',' '),
+                text:'AI импорт из файла: '+fname+(fileForThis.length?' (файл прикреплён)':''),
+                type:'note'
+              }]
             });
+            createdIds.push(newId);
           }
         });
-        saveData(); renderCandidates(); closeModal(); closeModal();
+        saveData(); renderCandidates();
+        closeModal(); closeModal();
+        // Reset file input state
+        pendingAIFile = null;
+        const nameDiv = document.getElementById('ai-file-name');
+        const selBtn = document.getElementById('ai-file-import-btn');
+        const fileInput = document.getElementById('ai-file-input');
+        if (nameDiv) { nameDiv.style.display='none'; nameDiv.textContent=''; }
+        if (selBtn) { selBtn.style.display='none'; }
+        if (fileInput) { fileInput.value=''; }
+        // Open the first imported candidate's card
+        if (createdIds.length > 0) {
+          setTimeout(function(){ openCandidateDetail(createdIds[0]); }, 100);
+        }
       }},
       { text: 'Отмена', action: function() { closeModal(); }}
     ]);
