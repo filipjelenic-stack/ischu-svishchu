@@ -206,6 +206,9 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
 .quick-btn{display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 5px;border-radius:12px;background:#f0f7ff;border:1.5px solid #d0e4ff;cursor:pointer;text-decoration:none;color:var(--text);transition:background .15s}
 .quick-btn:active{background:#d0e4ff}
 .quick-btn .qb-icon{font-size:22px}.quick-btn .qb-label{font-size:10px;font-weight:600;color:#6b87b0}
+.quick-btn-empty{position:relative;background:#f8fafc!important;border:1.5px dashed #c8d6e6!important;opacity:.55}
+.quick-btn-empty:active{opacity:1;background:#e8f2ff!important}
+.quick-btn-empty .qb-plus{position:absolute;top:3px;right:5px;width:14px;height:14px;border-radius:50%;background:#1e7de8;color:#fff;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;line-height:1}
 .activity-log{margin-bottom:14px}
 .activity-entry{padding:8px 10px;background:#f8fbff;border-radius:8px;margin-bottom:6px;font-size:12px}
 .activity-date{font-size:10px;color:#6b87b0;margin-bottom:2px}
@@ -562,6 +565,10 @@ function renderDashboard(){
   <div class="tile" onclick="switchTab(3)">${'<div class="tile-icon">📅</div><div class="tile-count">'+todayEvts+'</div><div class="tile-label">Событий сегодня</div>'}</div>
   <div class="tile" onclick="switchTab(4)">${'<div class="tile-icon">✅</div><div class="tile-count">'+pending+'</div><div class="tile-label">Задач в работе</div>'}</div>
 </div>
+<div class="ai-tools-row" style="display:flex;gap:8px;margin:12px 0 4px;flex-wrap:wrap">
+  <button onclick="aiPipelineInsights()" style="flex:1;min-width:130px;padding:12px;border:none;border-radius:12px;background:linear-gradient(135deg,#1e7de8,#6c3cf0);color:white;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(30,125,232,0.25);font-family:'Nunito',sans-serif">📊 AI Аналитика</button>
+  <button onclick="aiCheckDuplicates()" style="flex:1;min-width:130px;padding:12px;border:none;border-radius:12px;background:linear-gradient(135deg,#f59e0b,#ef4444);color:white;font-size:13px;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(245,158,11,0.25);font-family:'Nunito',sans-serif">🔍 Дубликаты</button>
+</div>
 <div class="dashboard-section">
   <div class="section-title">📞 Собеседования сегодня</div>
   ${todayIntv.length?todayIntv.map(c=>{
@@ -697,10 +704,10 @@ function openCandidateDetail(id){
   <div class="info-cell"><div class="info-cell-label">📌 Следующий шаг</div><div class="info-cell-value">${fmtDate(c.nextAction)}</div></div>
 </div>
 <div class="quick-actions">
-  ${phone?`<a class="quick-btn" href="${phoneUrl}"><span class="qb-icon">📞</span><span class="qb-label">Позвонить</span></a>`:'<div class="quick-btn" style="opacity:.3"><span class="qb-icon">📞</span><span class="qb-label">Позвонить</span></div>'}
-  ${waP?`<a class="quick-btn" href="${waUrl}"><span class="qb-icon">💬</span><span class="qb-label">WhatsApp</span></a>`:'<div class="quick-btn" style="opacity:.3"><span class="qb-icon">💬</span><span class="qb-label">WhatsApp</span></div>'}
-  ${tg?`<a class="quick-btn" href="${tgUrl}"><span class="qb-icon">✈️</span><span class="qb-label">Telegram</span></a>`:'<div class="quick-btn" style="opacity:.3"><span class="qb-icon">✈️</span><span class="qb-label">Telegram</span></div>'}
-  ${email?`<a class="quick-btn" href="${emailUrl}"><span class="qb-icon">✉️</span><span class="qb-label">Email</span></a>`:'<div class="quick-btn" style="opacity:.3"><span class="qb-icon">✉️</span><span class="qb-label">Email</span></div>'}
+  ${phone?`<a class="quick-btn" href="${phoneUrl}"><span class="qb-icon">📞</span><span class="qb-label">Позвонить</span></a>`:`<div class="quick-btn quick-btn-empty" onclick="openEditCandidate('${id}')" title="Добавить телефон"><span class="qb-icon">📞</span><span class="qb-label">Добавить</span><span class="qb-plus">+</span></div>`}
+  ${waP?`<a class="quick-btn" href="${waUrl}"><span class="qb-icon">💬</span><span class="qb-label">WhatsApp</span></a>`:`<div class="quick-btn quick-btn-empty" onclick="openEditCandidate('${id}')" title="Добавить WhatsApp"><span class="qb-icon">💬</span><span class="qb-label">Добавить</span><span class="qb-plus">+</span></div>`}
+  ${tg?`<a class="quick-btn" href="${tgUrl}"><span class="qb-icon">✈️</span><span class="qb-label">Telegram</span></a>`:`<div class="quick-btn quick-btn-empty" onclick="openEditCandidate('${id}')" title="Добавить Telegram"><span class="qb-icon">✈️</span><span class="qb-label">Добавить</span><span class="qb-plus">+</span></div>`}
+  ${email?`<a class="quick-btn" href="${emailUrl}"><span class="qb-icon">✉️</span><span class="qb-label">Email</span></a>`:`<div class="quick-btn quick-btn-empty" onclick="openEditCandidate('${id}')" title="Добавить Email"><span class="qb-icon">✉️</span><span class="qb-label">Добавить</span><span class="qb-plus">+</span></div>`}
   <div class="quick-btn" onclick="aiAssessCandidate('${c.id}')" style="background:linear-gradient(135deg,rgba(30,125,232,.1),rgba(108,60,240,.1))"><span class="qb-icon">🤖</span><span class="qb-label">AI Оценка</span></div>
   <div class="quick-btn" onclick="aiComposeMessage('${c.id}')" style="background:linear-gradient(135deg,rgba(30,125,232,.1),rgba(108,60,240,.1))"><span class="qb-icon">✉️</span><span class="qb-label">AI Письмо</span></div>
 </div>
@@ -1737,27 +1744,22 @@ async function handleAIFileSelect(input) {
   try{
     let kind=await _detectKind(file);
     let extractedText=null, extractedPhoto=null, fileDataUrl=null;
+    // Always read as DataURL so we can attach the original file to the contact later
+    fileDataUrl=await _readDU(file);
     if(kind==='image'){
-      fileDataUrl=await _readDU(file);
       extractedPhoto=await _resizePhoto(fileDataUrl,300);
     } else if(kind==='pdf'){
       try{
         const r=await _extractFromPDF(file);
         extractedText=r.text; extractedPhoto=r.photo;
       }catch(e){console.warn('pdf extract failed',e);}
-      if(!extractedText||extractedText.length<20){fileDataUrl=await _readDU(file);}
     } else if(kind==='docx'){
       try{
         const r=await _extractFromDOCX(file);
         extractedText=r.text; extractedPhoto=r.photo;
       }catch(e){console.warn('docx extract failed',e);}
-      if(!extractedText||extractedText.length<20){fileDataUrl=await _readDU(file);}
-    } else if(kind==='doc'){
-      fileDataUrl=await _readDU(file);
     } else if(kind==='text'){
-      extractedText=await _readTx(file);
-    } else {
-      fileDataUrl=await _readDU(file);
+      try{extractedText=await _readTx(file);}catch(e){}
     }
     pendingAIFile={
       name:file.name, type:file.type, size:file.size,
@@ -1796,6 +1798,10 @@ async function aiFileImport() {
     }
     const extractedPhoto = pendingAIFile.photo;
     const fname = pendingAIFile.name;
+    const attachedFile = pendingAIFile.data ? {
+      id: genId(), name: fname, size: pendingAIFile.size||0,
+      type: pendingAIFile.type||'', data: pendingAIFile.data, added: todayStr()
+    } : null;
 
     let previewHTML = '<div style="max-height:300px;overflow-y:auto">';
     if(extractedPhoto){
@@ -1825,7 +1831,8 @@ async function aiFileImport() {
               socials: c.telegram ? [{type:'Telegram',value:c.telegram}] : [],
               photo: (idx===0 ? extractedPhoto : null),
               notes: [c.notes, c.company ? 'Компания: '+c.company : ''].filter(Boolean).join('; '),
-              files: [], created: todayStr(),
+              files: (idx===0 && attachedFile) ? [attachedFile] : [],
+              created: todayStr(),
               activityLog: [{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'AI импорт из файла: '+fname,type:'note'}]
             });
           }
@@ -1934,37 +1941,56 @@ async function aiCheckDuplicates() {
 // ─── AI PIPELINE INSIGHTS ────────────────────
 async function aiPipelineInsights() {
   if (!isAIConfigured()) { showAISettings(); return; }
-  
+
   showModal('🤖 Анализ', '<div style="text-align:center;padding:20px"><div style="font-size:24px">⏳</div><div style="margin-top:8px;color:#666">AI анализирует воронку...</div></div>', []);
-  
+
   try {
     const stats = {
       total: candidates.length,
       byStatus: {},
+      bySource: {},
       vacancies: vacancies.length,
-      overdueTasks: tasks.filter(t => !t.done && t.date < todayStr()).length
+      openVacancies: vacancies.filter(v=>v.status==='open').length,
+      overdueTasks: tasks.filter(t => !t.done && t.dueDate && t.dueDate < todayStr()).length,
+      totalTasks: tasks.length
     };
-    candidates.forEach(c => { stats.byStatus[c.status] = (stats.byStatus[c.status]||0) + 1; });
-    
-    const result = await callAI('pipeline_insights', stats);
-    
+    candidates.forEach(c => {
+      stats.byStatus[c.status] = (stats.byStatus[c.status]||0) + 1;
+      if (c.source) stats.bySource[c.source] = (stats.bySource[c.source]||0) + 1;
+    });
+
+    const result = await callAI('pipeline_insights', { stats: stats });
+
     closeModal();
     let html = '<div style="font-size:13px;line-height:1.6">';
-    if (result.summary) html += '<p>' + result.summary + '</p>';
+    if (result.summary) html += '<p style="padding:10px;background:linear-gradient(135deg,rgba(30,125,232,0.08),rgba(108,60,240,0.08));border-radius:10px;margin-bottom:10px">' + result.summary + '</p>';
     if (result.insights && result.insights.length) {
+      html += '<div style="margin-top:10px;font-weight:600;margin-bottom:4px">💡 Наблюдения:</div>';
       result.insights.forEach(function(i) {
         const icon = i.type === 'warning' ? '⚠️' : i.type === 'success' ? '✅' : '💡';
-        html += '<div style="padding:8px;margin:6px 0;background:#f8f9fa;border-radius:8px">' + icon + ' ' + i.text + '</div>';
+        html += '<div style="padding:8px;margin:6px 0;background:#f8f9fa;border-radius:8px">' + icon + ' ' + (i.text||i) + '</div>';
+      });
+    }
+    if (result.bottlenecks && result.bottlenecks.length) {
+      html += '<div style="margin-top:10px;font-weight:600;margin-bottom:4px">🚧 Узкие места:</div>';
+      result.bottlenecks.forEach(function(b){
+        html += '<div style="padding:8px;margin:6px 0;background:#fff4e6;border-radius:8px">⚠️ ' + b + '</div>';
       });
     }
     if (result.recommendations && result.recommendations.length) {
-      html += '<div style="margin-top:10px;font-weight:600">📋 Рекомендации:</div>';
+      html += '<div style="margin-top:10px;font-weight:600;margin-bottom:4px">📋 Рекомендации:</div>';
       result.recommendations.forEach(function(r) {
         html += '<div style="padding:6px 0;padding-left:12px;border-left:2px solid #1e7de8;margin:4px 0;font-size:12px">' + r + '</div>';
       });
     }
+    if (result.metrics) {
+      html += '<div style="margin-top:10px;font-weight:600;margin-bottom:4px">📈 Метрики:</div>';
+      if (result.metrics.avgTimeToHire) html += '<div style="font-size:12px;margin:2px 0">⏱ Среднее время найма: ' + result.metrics.avgTimeToHire + '</div>';
+      if (result.metrics.conversionRate) html += '<div style="font-size:12px;margin:2px 0">📊 Конверсия: ' + result.metrics.conversionRate + '</div>';
+      if (result.metrics.topSources && result.metrics.topSources.length) html += '<div style="font-size:12px;margin:2px 0">🎯 Лучшие источники: ' + result.metrics.topSources.join(', ') + '</div>';
+    }
     html += '</div>';
-    
+
     showModal('📊 AI Аналитика воронки', html, [
       { text: 'Закрыть', cls: 'primary', action: function() { closeModal(); }}
     ]);
