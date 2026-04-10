@@ -1693,17 +1693,47 @@ function showImport(){
   <div id="iphone-preview" style="display:none"></div>
 </div>
 <div id="imp-email" style="display:none">
-  <div style="padding:12px;background:linear-gradient(135deg,#fff4e6,#fff0f0);border-radius:12px;margin-bottom:10px;border:1px solid #fbbf24">
-    <div style="font-size:13px;font-weight:700;margin-bottom:6px">✉️ Импорт из Email</div>
-    <div style="font-size:11px;color:#6b87b0;line-height:1.5">
-      Вставьте текст письма (Mail, Gmail, Outlook, Telegram и т.д.) или загрузите .eml файл. AI распознает имя, должность, компанию, телефон, email и извлечёт все контакты из письма — включая подписи, списки участников, CC-поля и упоминания.
-    </div>
+  <!-- Sub-mode switcher -->
+  <div style="display:flex;gap:4px;background:#f0f4fa;padding:3px;border-radius:10px;margin-bottom:10px">
+    <button class="email-mode-btn active" data-mode="book" onclick="switchEmailMode('book')" style="flex:1;padding:8px;border:none;border-radius:8px;background:linear-gradient(135deg,#1e7de8,#6c3cf0);color:white;font-size:11px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent">📇 Адресная книга</button>
+    <button class="email-mode-btn" data-mode="parse" onclick="switchEmailMode('parse')" style="flex:1;padding:8px;border:none;border-radius:8px;background:transparent;color:#6b87b0;font-size:11px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent">✉️ Из текста письма</button>
   </div>
-  <textarea class="form-textarea" id="imp-email-text" rows="8" placeholder="Вставьте сюда письмо целиком: тему, адресантов, тело сообщения, подпись...&#10;&#10;Пример:&#10;From: Анна Петрова <a.petrova@company.com>&#10;To: hr@team.com&#10;Subject: Резюме на позицию Frontend&#10;&#10;Здравствуйте! Меня зовут Анна Петрова, 5 лет опыта в React..." style="min-height:140px;font-family:inherit;font-size:12px"></textarea>
-  <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-    <input type="file" id="email-file-input" accept=".eml,.txt,.msg,message/rfc822" onchange="handleEmlFileSelect(this)" style="position:absolute;opacity:0;width:1px;height:1px">
-    <label for="email-file-input" style="flex:1;min-width:140px;padding:10px;border:1.5px dashed #1e7de8;border-radius:10px;background:#f0f7ff;text-align:center;cursor:pointer;font-size:12px;font-weight:600;color:#1e7de8">📎 Загрузить .eml файл</label>
-    <button class="btn-primary" onclick="aiEmailImport()" style="flex:2;min-width:180px;padding:10px;background:linear-gradient(135deg,#f59e0b,#ef4444);color:white;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer">🤖 Распознать через AI</button>
+
+  <!-- Mode A: Export address book from provider -->
+  <div id="email-mode-book">
+    <div style="padding:10px 12px;background:#f0f7ff;border-radius:10px;margin-bottom:10px;border-left:3px solid #1e7de8;font-size:11px;color:#4a6070;line-height:1.45">
+      <b>💡 Как это работает:</b> Экспортируйте адресную книгу из почты (один клик), загрузите файл сюда — AI разберёт и нормализует все контакты, проверит на дубликаты.
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+      <button onclick="showProviderGuide('gmail')" style="padding:14px 10px;border:1.5px solid #e0e8f2;border-radius:12px;background:white;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;-webkit-tap-highlight-color:transparent"><div style="font-size:28px">📮</div><div style="font-size:12px;font-weight:700;color:#ea4335">Gmail</div><div style="font-size:9px;color:#6b87b0">Google Contacts</div></button>
+      <button onclick="showProviderGuide('outlook')" style="padding:14px 10px;border:1.5px solid #e0e8f2;border-radius:12px;background:white;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;-webkit-tap-highlight-color:transparent"><div style="font-size:28px">📧</div><div style="font-size:12px;font-weight:700;color:#0078d4">Outlook</div><div style="font-size:9px;color:#6b87b0">Microsoft 365</div></button>
+      <button onclick="showProviderGuide('icloud')" style="padding:14px 10px;border:1.5px solid #e0e8f2;border-radius:12px;background:white;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;-webkit-tap-highlight-color:transparent"><div style="font-size:28px">☁️</div><div style="font-size:12px;font-weight:700;color:#0066cc">iCloud Mail</div><div style="font-size:9px;color:#6b87b0">Apple</div></button>
+      <button onclick="showProviderGuide('yandex')" style="padding:14px 10px;border:1.5px solid #e0e8f2;border-radius:12px;background:white;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;-webkit-tap-highlight-color:transparent"><div style="font-size:28px">📬</div><div style="font-size:12px;font-weight:700;color:#fc3f1d">Yandex</div><div style="font-size:9px;color:#6b87b0">Почта</div></button>
+      <button onclick="showProviderGuide('mailru')" style="padding:14px 10px;border:1.5px solid #e0e8f2;border-radius:12px;background:white;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;grid-column:1/-1;-webkit-tap-highlight-color:transparent"><div style="font-size:28px">🇷🇺</div><div style="font-size:12px;font-weight:700;color:#005ff9">Mail.ru</div><div style="font-size:9px;color:#6b87b0">Контакты → Экспорт</div></button>
+    </div>
+    <div id="provider-guide" style="display:none;margin-bottom:10px"></div>
+
+    <input type="file" id="email-book-input" accept=".vcf,.csv,.tsv,.json,text/*" multiple onchange="handleEmailBookUpload(this)" style="position:absolute;opacity:0;width:1px;height:1px">
+    <label for="email-book-input" style="display:block;border:2px dashed #1e7de8;border-radius:12px;padding:22px;text-align:center;background:linear-gradient(135deg,#f0f7ff,#e8f4ff);cursor:pointer;-webkit-tap-highlight-color:transparent">
+      <div style="font-size:38px;margin-bottom:6px">📥</div>
+      <div style="font-size:15px;font-weight:800;color:#1e7de8">Загрузить экспорт из почты</div>
+      <div style="font-size:11px;color:#6b87b0;margin-top:4px">.vcf, .csv, .tsv — любой формат, AI разберёт</div>
+    </label>
+    <div id="email-book-preview" style="display:none;margin-top:10px"></div>
+  </div>
+
+  <!-- Mode B: Parse email text with AI -->
+  <div id="email-mode-parse" style="display:none">
+    <div style="padding:10px 12px;background:#fff4e6;border-radius:10px;margin-bottom:10px;border-left:3px solid #f59e0b;font-size:11px;color:#7a5000;line-height:1.45">
+      <b>💡 Как это работает:</b> Вставьте текст письма (Mail, Gmail, Outlook, тред, подпись, CC-поле) или загрузите .eml файл. AI извлечёт <b>всех упомянутых людей</b> — отправитель, получатели, подписи, списки участников.
+    </div>
+    <textarea class="form-textarea" id="imp-email-text" rows="8" placeholder="Вставьте сюда письмо целиком: тему, адресантов, тело сообщения, подпись...&#10;&#10;Пример:&#10;From: Анна Петрова <a.petrova@company.com>&#10;To: hr@team.com&#10;Subject: Резюме на позицию Frontend&#10;&#10;Здравствуйте! Меня зовут Анна Петрова, 5 лет опыта в React..." style="min-height:140px;font-family:inherit;font-size:12px"></textarea>
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <input type="file" id="email-file-input" accept=".eml,.txt,.msg,message/rfc822" onchange="handleEmlFileSelect(this)" style="position:absolute;opacity:0;width:1px;height:1px">
+      <label for="email-file-input" style="flex:1;min-width:140px;padding:10px;border:1.5px dashed #1e7de8;border-radius:10px;background:#f0f7ff;text-align:center;cursor:pointer;font-size:12px;font-weight:600;color:#1e7de8">📎 Загрузить .eml файл</label>
+      <button class="btn-primary" onclick="aiEmailImport()" style="flex:2;min-width:180px;padding:10px;background:linear-gradient(135deg,#f59e0b,#ef4444);color:white;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer">🤖 Распознать через AI</button>
+    </div>
   </div>
 </div>
 <div id="imp-csv" style="display:none">
@@ -1990,6 +2020,235 @@ async function handleIPhoneImport(input){
   }
 
   preview.innerHTML='<div style="padding:10px;background:#fee;border-radius:8px;font-size:12px;color:#c62828">Формат не поддерживается. Нужен .vcf или изображение.</div>';
+}
+
+// ── Email mode switcher ──
+function switchEmailMode(mode){
+  const a = document.getElementById('email-mode-book');
+  const b = document.getElementById('email-mode-parse');
+  if(a) a.style.display = mode==='book' ? 'block' : 'none';
+  if(b) b.style.display = mode==='parse' ? 'block' : 'none';
+  document.querySelectorAll('.email-mode-btn').forEach(btn=>{
+    const active = btn.getAttribute('data-mode')===mode;
+    btn.classList.toggle('active',active);
+    btn.style.background = active ? 'linear-gradient(135deg,#1e7de8,#6c3cf0)' : 'transparent';
+    btn.style.color = active ? 'white' : '#6b87b0';
+  });
+}
+
+// ── Provider export guides ──
+const PROVIDER_GUIDES = {
+  gmail: {
+    name: 'Gmail / Google Contacts',
+    color: '#ea4335',
+    steps: [
+      'Откройте <b>contacts.google.com</b> в Safari на iPhone (или на компьютере)',
+      'Слева в меню — <b>"Экспорт"</b> (если не видно, в iPhone Safari: меню <b>"⋯"</b>)',
+      'Выберите <b>"Все контакты"</b> (или нужные метки)',
+      'Формат — <b>vCard (для приложения "Контакты" iOS)</b>',
+      'Сохраните файл → загрузите его ниже'
+    ],
+    fallback: 'Альтернатива: формат Google CSV — тоже работает, AI разберёт.'
+  },
+  outlook: {
+    name: 'Outlook / Microsoft 365',
+    color: '#0078d4',
+    steps: [
+      'Откройте <b>outlook.live.com</b> или <b>outlook.office.com</b>',
+      'Вверху — иконка <b>"Люди"</b> (People) 👥',
+      'Меню <b>"Управление"</b> → <b>"Экспорт контактов"</b>',
+      'Выберите <b>"Все контакты"</b> → формат CSV',
+      'Загрузите файл ниже'
+    ],
+    fallback: 'Outlook экспортирует CSV в своём формате — AI распознает.'
+  },
+  icloud: {
+    name: 'iCloud Mail',
+    color: '#0066cc',
+    steps: [
+      'Откройте <b>iCloud.com</b> → войдите в Apple ID',
+      'Откройте <b>Контакты</b>',
+      'Нажмите <b>⚙️</b> внизу → <b>"Выбрать все"</b>',
+      'Снова <b>⚙️</b> → <b>"Экспорт vCard..."</b>',
+      'Сохраните .vcf и загрузите его ниже'
+    ],
+    fallback: 'Тот же метод работает в iPhone tab — там он называется "Способ 1".'
+  },
+  yandex: {
+    name: 'Yandex Почта',
+    color: '#fc3f1d',
+    steps: [
+      'Откройте <b>mail.yandex.ru</b>',
+      'Вверху — <b>"Контакты"</b>',
+      'Меню (⋯) → <b>"Ещё"</b> → <b>"Сохранить контакты"</b>',
+      'Выберите формат <b>vCard</b> или <b>CSV</b>',
+      'Загрузите файл ниже'
+    ],
+    fallback: 'Yandex также поддерживает экспорт в LDIF — загрузите как есть, AI разберёт.'
+  },
+  mailru: {
+    name: 'Mail.ru Почта',
+    color: '#005ff9',
+    steps: [
+      'Откройте <b>e.mail.ru</b>',
+      'Слева меню — <b>"Контакты"</b>',
+      'Справа вверху — <b>⚙️ Настройки</b> или <b>"..."</b>',
+      'Выберите <b>"Экспорт"</b> → формат <b>vCard</b> или <b>CSV</b>',
+      'Сохраните файл → загрузите его ниже'
+    ],
+    fallback: 'Если кнопки экспорта нет — откройте настройки адресной книги в десктопной версии.'
+  }
+};
+function showProviderGuide(key){
+  const g = PROVIDER_GUIDES[key];
+  if(!g) return;
+  const div = document.getElementById('provider-guide');
+  if(!div) return;
+  let html = '<div style="padding:12px;background:linear-gradient(135deg,#f8fbff,#fff);border:1px solid '+g.color+'30;border-left:3px solid '+g.color+';border-radius:10px">';
+  html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><div style="font-size:13px;font-weight:800;color:'+g.color+';flex:1">📘 '+g.name+'</div><button onclick="document.getElementById(\'provider-guide\').style.display=\'none\'" style="background:#f0f4fa;border:none;width:24px;height:24px;border-radius:50%;font-size:12px;color:#6b87b0;cursor:pointer">✕</button></div>';
+  html += '<ol style="font-size:11px;color:#4a6070;line-height:1.6;padding-left:18px;margin:0">';
+  g.steps.forEach(s=>{ html += '<li>'+s+'</li>'; });
+  html += '</ol>';
+  if(g.fallback) html += '<div style="font-size:10px;color:#8a9ab5;margin-top:8px;padding-top:8px;border-top:1px dashed #e0e8f2"><i>'+g.fallback+'</i></div>';
+  html += '</div>';
+  div.innerHTML = html;
+  div.style.display = 'block';
+}
+
+// ── Handle uploaded address book export (.vcf/.csv/.tsv/any) ──
+async function handleEmailBookUpload(input){
+  const files = Array.from(input.files || []);
+  if(!files.length) return;
+  const preview = document.getElementById('email-book-preview');
+  preview.style.display = 'block';
+  preview.innerHTML = '<div style="padding:10px;background:#f5f5f5;border-radius:8px;font-size:12px;text-align:center">⏳ Обработка '+files.length+' файл(ов)...</div>';
+
+  const allContacts = [];
+  for (const file of files) {
+    const name = (file.name||'').toLowerCase();
+    const type = (file.type||'').toLowerCase();
+    try {
+      // Path A: vCard file — use inline multi-vCard parser
+      if (name.endsWith('.vcf') || type==='text/vcard' || type==='text/x-vcard') {
+        const txt = await _readTx(file);
+        const lines = _vcardUnfold(txt);
+        let cur=null, photoLines=null, photoMime=null;
+        lines.forEach(L=>{
+          if(/^BEGIN:VCARD/i.test(L)){ cur={name:'',phones:[],emails:[],company:'',position:'',note:'',telegram:'',photo:null}; photoLines=null; photoMime=null; return; }
+          if(/^END:VCARD/i.test(L)){
+            if(cur){
+              if(photoLines){ cur.photo='data:'+(photoMime||'image/jpeg')+';base64,'+photoLines.replace(/\s/g,''); }
+              if(cur.name) allContacts.push({ name:cur.name, phones:cur.phones.map(p=>({type:'mobile',value:p})), emails:cur.emails.map(e=>({type:'work',value:e})), company:cur.company, position:cur.position, notes:cur.note, photo:cur.photo, telegram:cur.telegram });
+              cur=null;
+            }
+            return;
+          }
+          if(!cur) return;
+          if(photoLines!==null && !/^[A-Z][A-Z0-9-]*[;:]/i.test(L)){ photoLines += L.trim(); return; }
+          else if(photoLines!==null){ photoLines=null; }
+          const parsed = _vcardParseLine(L); if(!parsed) return;
+          const {prop, params, value} = parsed;
+          if(prop==='FN'){ cur.name=_vcardUnescape(value); }
+          else if(prop==='N' && !cur.name){
+            const p=value.split(';').map(s=>_vcardUnescape(s).trim());
+            cur.name=((p[1]||'')+' '+(p[0]||'')).trim() || p[0] || p[1];
+          }
+          else if(prop==='TEL'){ const v=_vcardUnescape(value).trim(); if(v && !cur.phones.includes(v)) cur.phones.push(v); }
+          else if(prop==='EMAIL'){ const v=_vcardUnescape(value).trim(); if(v && !cur.emails.includes(v)) cur.emails.push(v); }
+          else if(prop==='ORG'){ cur.company=_vcardUnescape(value).replace(/;/g,' ').trim(); }
+          else if(prop==='TITLE'){ cur.position=_vcardUnescape(value); }
+          else if(prop==='NOTE'){ cur.note=_vcardUnescape(value); }
+          else if(prop==='PHOTO' && value){
+            if(params.ENCODING && /^(B|BASE64)$/i.test(params.ENCODING.toString())){
+              photoMime = params.JPEG?'image/jpeg':params.PNG?'image/png':'image/jpeg';
+              photoLines = value;
+            } else if(/^data:/.test(value)){ cur.photo=value; }
+          }
+        });
+      }
+      // Path B: CSV/TSV/any text — send to AI for normalization
+      else {
+        if(!isAIConfigured()){
+          preview.innerHTML = '<div style="padding:10px;background:#fff4e6;border-radius:8px;font-size:12px;color:#7a5000">Для разбора CSV/других форматов нужно настроить AI. Или конвертируйте в .vcf.</div>';
+          return;
+        }
+        preview.innerHTML = '<div style="padding:10px;background:#f0f7ff;border-radius:8px;font-size:12px;text-align:center">🤖 AI разбирает '+file.name+'...</div>';
+        const txt = await _readTx(file);
+        // Chunk large CSV files (>80k chars) and send sequentially
+        const chunks = [];
+        if(txt.length > 80000){
+          const header = txt.split('\n')[0];
+          const rows = txt.split('\n').slice(1);
+          const chunkSize = 400; // rows per chunk
+          for(let i=0;i<rows.length;i+=chunkSize){
+            chunks.push(header + '\n' + rows.slice(i,i+chunkSize).join('\n'));
+          }
+        } else { chunks.push(txt); }
+        for(const ch of chunks){
+          try{
+            const result = await callAI('file_import', { filename: file.name, filetype: file.type||'text/csv', kind: 'text', text: ch });
+            const items = Array.isArray(result) ? result : (result.contacts || [result]);
+            items.forEach(c=>{
+              if(!c || !c.name) return;
+              allContacts.push({
+                name: c.name, position: c.position||'', company: c.company||'',
+                phones: c.phone ? [{type:'mobile',value:c.phone}] : [],
+                emails: c.email ? [{type:'work',value:c.email}] : [],
+                notes: c.notes||'', telegram: c.telegram||'', photo: null
+              });
+            });
+          }catch(e){ console.warn('AI parse chunk failed', e); }
+        }
+      }
+    } catch(err) { console.warn('file processing error', err); }
+  }
+
+  if(!allContacts.length){
+    preview.innerHTML = '<div style="padding:10px;background:#fee;border-radius:8px;font-size:12px;color:#c62828">Не удалось извлечь контакты. Попробуйте другой формат экспорта.</div>';
+    return;
+  }
+
+  // Show preview + confirm
+  let html = '<div style="padding:10px;background:#e8f5ff;border-radius:8px;font-size:12px;margin-bottom:8px"><b>'+allContacts.length+'</b> контактов извлечено из '+files.length+' файл(ов)</div>';
+  html += '<div style="max-height:260px;overflow-y:auto">';
+  allContacts.slice(0,10).forEach(c=>{
+    const photoHTML = c.photo ? '<img src="'+c.photo+'" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0" alt="">' : '<div style="width:32px;height:32px;border-radius:50%;background:#d0e4ff;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">👤</div>';
+    html += '<div style="display:flex;align-items:center;gap:10px;padding:8px;margin:4px 0;background:#f0f7ff;border-radius:8px;font-size:12px">'+photoHTML+'<div style="flex:1;min-width:0"><div style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+c.name+'</div>';
+    const meta=[c.position,c.company,(c.phones[0]&&c.phones[0].value),(c.emails[0]&&c.emails[0].value)].filter(Boolean).join(' · ');
+    if(meta) html+='<div style="font-size:10px;color:#6b87b0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+meta+'</div>';
+    html+='</div></div>';
+  });
+  if(allContacts.length>10) html += '<div style="text-align:center;color:#6b87b0;font-size:11px;padding:4px">...ещё '+(allContacts.length-10)+'</div>';
+  html += '</div>';
+  html += '<button class="btn-primary" id="email-book-confirm" style="margin-top:10px;width:100%;padding:12px;background:linear-gradient(135deg,#1e7de8,#6c3cf0);color:white;border:none;border-radius:10px;font-size:14px;font-weight:700">✅ Импортировать '+allContacts.length+' контактов</button>';
+  preview.innerHTML = html;
+
+  document.getElementById('email-book-confirm').onclick = async function(){
+    let strategy = null;
+    if(allContacts.length>1){ strategy = await askDedupeStrategy('Экспорт почты ('+allContacts.length+' контактов)'); if(strategy===null) return; }
+    let added=0, merged=0, skipped=0;
+    const createdIds=[];
+    for(const c of allContacts){
+      if(!c.name) continue;
+      const socials = c.telegram ? [{type:'Telegram',value:c.telegram}] : [];
+      const newCand = {
+        id: genId(), name: c.name, position: c.position||'', company: c.company||'',
+        status:'new', source:'other', vacancy:'', rating:3, salaryMin:0, salaryMax:0,
+        interviewDate:'', nextAction:'',
+        phones: c.phones||[], emails: c.emails||[], socials: socials,
+        photo: c.photo||null, notes: c.notes||'',
+        files:[], created: todayStr(),
+        activityLog: [{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Импорт из адресной книги почты',type:'note'}]
+      };
+      const res = await smartAddCandidate(newCand, strategy?{autoStrategy:strategy}:null);
+      if(res.action==='added'){ createdIds.push(res.candidate.id); added++; }
+      else if(res.action==='merged'){ merged++; }
+      else skipped++;
+    }
+    saveData(); renderCandidates(); closeSheet();
+    showToast('Email импорт: +'+added+' новых, '+merged+' обновлено'+(skipped?', '+skipped+' пропущено':''),'success',5000);
+    if(createdIds.length>0) setTimeout(()=>openCandidateDetail(createdIds[0]),150);
+  };
 }
 
 // ── Email import: parse pasted text or .eml file via AI ──
