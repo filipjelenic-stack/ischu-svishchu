@@ -136,9 +136,21 @@ module.exports = async (req, res) => {
       prompt = `You are an expert HR consultant. Assess this candidate for recruitment. Return JSON with: score (1-100), strengths (array of strings), weaknesses (array of strings), recommendation (string), interviewQuestions (array of 5 strings). Candidate data:\n${JSON.stringify(data.candidate)}`;
       break;
 
-    case 'compose_message':
-      prompt = `Write a professional recruitment outreach message in Russian for this candidate. Return JSON with: email (object with subject and body), telegram (string - short message). Candidate:\n${JSON.stringify(data.candidate)}\nVacancy: ${data.vacancy || 'general recruitment'}`;
+    case 'compose_message': {
+      // Accept both shapes: nested {candidate, vacancy} OR flat {name, position, company, notes}
+      const cand = data.candidate || { name: data.name, position: data.position, company: data.company, notes: data.notes, status: data.status };
+      const vac = data.vacancy || 'general recruitment';
+      prompt = `You are a recruitment outreach assistant. Write a warm but professional outreach message in RUSSIAN for this candidate. Return ONLY a valid JSON object (no prose, no markdown) with this EXACT shape:
+{
+  "email": {
+    "subject": "<subject line in Russian, under 80 chars>",
+    "body": "<full email body in Russian, 3-5 short paragraphs, polite, personalized using candidate's name/position/company>"
+  },
+  "telegram": "<short 2-3 sentence Russian message suitable for Telegram DM, friendly but professional>"
+}
+Candidate:\n${JSON.stringify(cand)}\nVacancy context: ${typeof vac==='string'?vac:JSON.stringify(vac)}`;
       break;
+    }
 
     case 'find_duplicates': {
       const cands = data.candidates || data.contacts || data;
