@@ -1,0 +1,8 @@
+{
+  "name": "ischu-svishchu",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "mammoth": "^1.7.2"
+  }
+}
