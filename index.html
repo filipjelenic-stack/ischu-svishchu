@@ -240,6 +240,10 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
 .import-preview th,.import-preview td{border:1px solid #d0e4ff;padding:4px 8px;white-space:nowrap}
 .import-preview th{background:#f0f7ff;font-weight:700}
 </style>
+<!-- Client-side document parsing libraries -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>if(window['pdfjsLib']){pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';}</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.7.2/mammoth.browser.min.js"></script>
 </head>
 <body>
 
@@ -1027,7 +1031,7 @@ ${list.length?list.map(t=>{
     <div style="font-size:36px;margin-bottom:8px">📎</div>
     <div style="font-size:14px;font-weight:600;color:#1e7de8;margin-bottom:4px">Загрузите любой файл</div>
     <div style="font-size:11px;color:#999;margin-bottom:12px">PDF, Word, Excel, фото, скриншот — AI извлечёт контакты</div>
-    <input type="file" id="ai-file-input" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.vcf" onchange="handleAIFileSelect(this)" style="position:absolute;opacity:0;width:1px;height:1px">
+    <input type="file" id="ai-file-input" accept="image/*,.pdf,.doc,.docx,.txt,.vcf,.csv" onchange="handleAIFileSelect(this)" style="position:absolute;opacity:0;width:1px;height:1px">
     <span style="display:inline-block;padding:12px 28px;background:#1e7de8;color:white;border:none;border-radius:10px;font-size:15px;font-weight:600;-webkit-tap-highlight-color:transparent">📎 Выбрать файл</span>
   </label>
   <div id="ai-file-name" style="display:none;font-size:12px;color:#666;margin-bottom:8px;padding:8px;background:#f5f5f5;border-radius:8px"></div>
@@ -1604,49 +1608,199 @@ function closeModal() {
 var pendingAIFile = null;
 var pendingCandPhoto = null;
 
-function handleAIFileSelect(input) {
+// Read file as ArrayBuffer
+function _readAB(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.onerror=rej;r.readAsArrayBuffer(file);});}
+// Read file as DataURL
+function _readDU(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.onerror=rej;r.readAsDataURL(file);});}
+// Read file as Text
+function _readTx(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.onerror=rej;r.readAsText(file,'UTF-8');});}
+
+// Resize dataURL image to max 300px and return new dataURL
+function _resizePhoto(dataUrl, maxPx){
+  return new Promise((res)=>{
+    const img=new Image();
+    img.onload=function(){
+      const M=maxPx||300;
+      let w=img.width, h=img.height;
+      if(w>h){if(w>M){h=Math.round(h*M/w);w=M;}}
+      else{if(h>M){w=Math.round(w*M/h);h=M;}}
+      const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+      const ctx=cv.getContext('2d');ctx.drawImage(img,0,0,w,h);
+      res(cv.toDataURL('image/jpeg',0.85));
+    };
+    img.onerror=function(){res(null);};
+    img.src=dataUrl;
+  });
+}
+
+// Extract text + first image from PDF using pdf.js
+async function _extractFromPDF(file){
+  if(!window.pdfjsLib) throw new Error('pdf.js не загружен');
+  const ab=await _readAB(file);
+  const pdf=await pdfjsLib.getDocument({data:ab}).promise;
+  let fullText='';
+  let photoDataUrl=null;
+  const maxPages=Math.min(pdf.numPages,10);
+  for(let p=1;p<=maxPages;p++){
+    const page=await pdf.getPage(p);
+    const tc=await page.getTextContent();
+    fullText+=tc.items.map(i=>i.str).join(' ')+'\n\n';
+    // Try to extract embedded images from first 2 pages
+    if(p<=2 && !photoDataUrl){
+      try{
+        const ops=await page.getOperatorList();
+        for(let i=0;i<ops.fnArray.length;i++){
+          if(ops.fnArray[i]===pdfjsLib.OPS.paintImageXObject){
+            const imgName=ops.argsArray[i][0];
+            try{
+              const img=await new Promise((res)=>{
+                page.objs.get(imgName,(o)=>res(o));
+                setTimeout(()=>res(null),1500);
+              });
+              if(img && img.bitmap){
+                const cv=document.createElement('canvas');
+                cv.width=img.width;cv.height=img.height;
+                const ctx=cv.getContext('2d');
+                ctx.drawImage(img.bitmap,0,0);
+                // Only accept photo-like images (not logos): aspect ~ portrait and min size
+                if(img.width>=80 && img.height>=80 && img.width<2000){
+                  const du=cv.toDataURL('image/jpeg',0.85);
+                  photoDataUrl=await _resizePhoto(du,300);
+                  break;
+                }
+              }
+            }catch(e){}
+          }
+        }
+      }catch(e){}
+    }
+  }
+  return {text:fullText.trim(), photo:photoDataUrl};
+}
+
+// Extract text + first image from DOCX using mammoth.js
+async function _extractFromDOCX(file){
+  if(!window.mammoth) throw new Error('mammoth.js не загружен');
+  const ab=await _readAB(file);
+  let photoDataUrl=null;
+  const opts={
+    convertImage: mammoth.images.imgElement(function(image){
+      return image.read('base64').then(function(imageBuffer){
+        if(!photoDataUrl){
+          const du='data:'+image.contentType+';base64,'+imageBuffer;
+          return _resizePhoto(du,300).then(r=>{photoDataUrl=r;return{src:du};});
+        }
+        return {src:'data:'+image.contentType+';base64,'+imageBuffer};
+      });
+    })
+  };
+  const res=await mammoth.extractRawText({arrayBuffer:ab});
+  // run full conversion to trigger image callback
+  await mammoth.convertToHtml({arrayBuffer:ab},opts);
+  return {text:(res.value||'').trim(), photo:photoDataUrl};
+}
+
+// Detect real file kind by magic bytes
+async function _detectKind(file){
+  const name=(file.name||'').toLowerCase();
+  const type=(file.type||'').toLowerCase();
+  try{
+    const headBuf=await file.slice(0,8).arrayBuffer();
+    const b=new Uint8Array(headBuf);
+    // %PDF
+    if(b[0]===0x25 && b[1]===0x50 && b[2]===0x44 && b[3]===0x46) return 'pdf';
+    // PK\x03\x04 = ZIP (docx/xlsx/pptx container)
+    if(b[0]===0x50 && b[1]===0x4b && b[2]===0x03 && b[3]===0x04) return 'docx';
+    // D0 CF 11 E0 = OLE2 (legacy .doc/.xls)
+    if(b[0]===0xd0 && b[1]===0xcf && b[2]===0x11 && b[3]===0xe0) return 'doc';
+    // JPEG/PNG/GIF
+    if(b[0]===0xff && b[1]===0xd8) return 'image';
+    if(b[0]===0x89 && b[1]===0x50 && b[2]===0x4e && b[3]===0x47) return 'image';
+    if(b[0]===0x47 && b[1]===0x49 && b[2]===0x46) return 'image';
+  }catch(e){}
+  if(type.startsWith('image/')) return 'image';
+  if(name.endsWith('.pdf')) return 'pdf';
+  if(name.endsWith('.docx')) return 'docx';
+  if(name.endsWith('.doc')) return 'doc';
+  if(name.endsWith('.txt')||name.endsWith('.csv')||name.endsWith('.vcf')||type.startsWith('text/')) return 'text';
+  return 'unknown';
+}
+
+async function handleAIFileSelect(input) {
   const file = input.files[0];
   if (!file) return;
   const nameDiv = document.getElementById('ai-file-name');
   const btn = document.getElementById('ai-file-import-btn');
-  
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    pendingAIFile = {
-      name: file.name,
-      type: file.type,
-      size: file.size,
-      data: e.target.result // base64 data URL
+  nameDiv.style.display='block';
+  nameDiv.textContent='⏳ Обработка файла...';
+  btn.style.display='none';
+  try{
+    let kind=await _detectKind(file);
+    let extractedText=null, extractedPhoto=null, fileDataUrl=null;
+    if(kind==='image'){
+      fileDataUrl=await _readDU(file);
+      extractedPhoto=await _resizePhoto(fileDataUrl,300);
+    } else if(kind==='pdf'){
+      try{
+        const r=await _extractFromPDF(file);
+        extractedText=r.text; extractedPhoto=r.photo;
+      }catch(e){console.warn('pdf extract failed',e);}
+      if(!extractedText||extractedText.length<20){fileDataUrl=await _readDU(file);}
+    } else if(kind==='docx'){
+      try{
+        const r=await _extractFromDOCX(file);
+        extractedText=r.text; extractedPhoto=r.photo;
+      }catch(e){console.warn('docx extract failed',e);}
+      if(!extractedText||extractedText.length<20){fileDataUrl=await _readDU(file);}
+    } else if(kind==='doc'){
+      fileDataUrl=await _readDU(file);
+    } else if(kind==='text'){
+      extractedText=await _readTx(file);
+    } else {
+      fileDataUrl=await _readDU(file);
+    }
+    pendingAIFile={
+      name:file.name, type:file.type, size:file.size,
+      kind:kind, text:extractedText, photo:extractedPhoto, data:fileDataUrl
     };
-    nameDiv.style.display = 'block';
-    nameDiv.textContent = '📄 ' + file.name + ' (' + (file.size/1024).toFixed(1) + ' KB)';
-    btn.style.display = 'block';
-  };
-  reader.readAsDataURL(file);
+    nameDiv.textContent='📄 '+file.name+' ('+(file.size/1024).toFixed(1)+' KB)'+(extractedPhoto?' · фото найдено':'')+(extractedText?' · текст извлечён':'');
+    btn.style.display='block';
+  }catch(err){
+    nameDiv.textContent='⚠️ Ошибка: '+(err.message||err);
+    pendingAIFile=null;
+  }
 }
 
 async function aiFileImport() {
   if (!isAIConfigured()) { showAISettings(); return; }
   if (!pendingAIFile) { alert('Выберите файл'); return; }
-  
+
   const btn = document.getElementById('ai-file-import-btn');
   btn.textContent = '⏳ AI анализирует файл...';
   btn.disabled = true;
-  
+
   try {
-    const result = await callAI('file_import', {
+    const payload={
       filename: pendingAIFile.name,
       filetype: pendingAIFile.type,
-      filedata: pendingAIFile.data
-    });
-    
+      kind: pendingAIFile.kind
+    };
+    if(pendingAIFile.text){ payload.text = pendingAIFile.text; }
+    if(pendingAIFile.data){ payload.filedata = pendingAIFile.data; }
+    const result = await callAI('file_import', payload);
+
     const contacts = Array.isArray(result) ? result : (result.contacts || [result]);
-    if (contacts.length === 0) {
+    if (contacts.length === 0 || (contacts.length===1 && !contacts[0].name)) {
       alert('AI не нашёл контактов в файле');
       return;
     }
-    
+    const extractedPhoto = pendingAIFile.photo;
+    const fname = pendingAIFile.name;
+
     let previewHTML = '<div style="max-height:300px;overflow-y:auto">';
+    if(extractedPhoto){
+      previewHTML += '<div style="text-align:center;margin-bottom:10px"><img src="'+extractedPhoto+'" style="max-width:100px;max-height:100px;border-radius:10px;border:2px solid #1e7de8"><div style="font-size:11px;color:#666;margin-top:4px">📸 Фото извлечено из файла</div></div>';
+    }
     contacts.forEach(function(c) {
       previewHTML += '<div style="padding:8px;margin:4px 0;background:rgba(30,125,232,0.05);border-radius:8px;font-size:13px">';
       previewHTML += '<b>' + (c.name || 'Без имени') + '</b>';
@@ -1657,24 +1811,26 @@ async function aiFileImport() {
       previewHTML += '</div>';
     });
     previewHTML += '</div>';
-    
+
     showModal('🤖 Найдено ' + contacts.length + ' контактов из файла', previewHTML, [
       { text: 'Импортировать все', cls: 'primary', action: function() {
-        contacts.forEach(function(c) {
+        contacts.forEach(function(c, idx) {
           if (c.name) {
             candidates.push({
               id: genId(), name: c.name, position: c.position||'', company: c.company||'',
-              status: 'new', source: 'other', vacancy: '', rating: 3, salaryMin: 0, salaryMax: 0,
-              interviewDate: '', nextAction: '', phones: c.phone ? [{type:'mobile',value:c.phone}] : [],
+              status: 'new', source: c.source||'other', vacancy: '', rating: 3, salaryMin: 0, salaryMax: 0,
+              interviewDate: '', nextAction: '',
+              phones: c.phone ? [{type:'mobile',value:c.phone}] : [],
               emails: c.email ? [{type:'work',value:c.email}] : [],
               socials: c.telegram ? [{type:'Telegram',value:c.telegram}] : [],
-              photo:null, notes: [c.notes, c.company ? 'Компания: '+c.company : ''].filter(Boolean).join('; '),
-              photo: null, files: [], created: todayStr(),
-              activityLog: [{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'AI импорт из файла: '+pendingAIFile.name,type:'note'}]
+              photo: (idx===0 ? extractedPhoto : null),
+              notes: [c.notes, c.company ? 'Компания: '+c.company : ''].filter(Boolean).join('; '),
+              files: [], created: todayStr(),
+              activityLog: [{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'AI импорт из файла: '+fname,type:'note'}]
             });
           }
         });
-        saveCandidates(); renderCandidates(); closeModal(); closeModal();
+        saveData(); renderCandidates(); closeModal(); closeModal();
       }},
       { text: 'Отмена', action: function() { closeModal(); }}
     ]);
