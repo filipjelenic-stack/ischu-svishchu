@@ -512,6 +512,13 @@ function migrateCandidate(c){
   c.files = Array.isArray(c.files) ? c.files : [];
   c.activityLog = Array.isArray(c.activityLog) ? c.activityLog : [];
   c.created = c.created || todayStr();
+  // ── New structured fields (added 2026-04) ──
+  c.citizenship     = c.citizenship     || '';
+  c.currentCompany  = c.currentCompany  || '';
+  c.currentRole     = c.currentRole     || '';
+  c.currentTenure   = c.currentTenure   || '';
+  c.sourcedAt       = c.sourcedAt       || '';
+  c.vacancyText     = c.vacancyText     || '';
   return c;
 }
 function migrateVacancy(v){
@@ -661,7 +668,8 @@ function findDuplicate(newCand, excludeId){
   }
   return null;
 }
-// Merge new candidate data INTO existing, preserving existing when new is empty
+// Merge new candidate data INTO existing, preserving existing when new is empty.
+// Non-destructive: never overwrites a non-empty scalar field; always appends to lists.
 function mergeCandidate(existing, incoming){
   if(incoming.position && !existing.position) existing.position=incoming.position;
   else if(incoming.position && existing.position && incoming.position!==existing.position) existing.position=existing.position+' / '+incoming.position;
@@ -669,10 +677,29 @@ function mergeCandidate(existing, incoming){
   if(incoming.notes){
     existing.notes = (existing.notes ? existing.notes+'\n' : '') + incoming.notes;
   }
+  // Fill-if-empty for the newer structured fields — never overwrite user-entered data
+  ['citizenship','currentCompany','currentRole','currentTenure','sourcedAt','vacancyText'].forEach(k=>{
+    if(incoming[k] && !existing[k]) existing[k]=incoming[k];
+  });
+  // Prefer earliest sourcedAt when both present
+  if(incoming.sourcedAt && existing.sourcedAt && incoming.sourcedAt<existing.sourcedAt) existing.sourcedAt=incoming.sourcedAt;
+  // Salary — widen range if incoming has better bounds
+  if(incoming.salaryMin && (!existing.salaryMin || incoming.salaryMin<existing.salaryMin)) existing.salaryMin=incoming.salaryMin;
+  if(incoming.salaryMax && incoming.salaryMax>existing.salaryMax) existing.salaryMax=incoming.salaryMax;
+  // Vacancy link — fill if empty
+  if(incoming.vacancy && !existing.vacancy) existing.vacancy=incoming.vacancy;
+  // Rating — take higher if existing is default (3)
+  if(typeof incoming.rating==='number' && existing.rating===3 && incoming.rating>0) existing.rating=incoming.rating;
   // Merge phones/emails/socials, avoiding duplicates
   ['phones','emails','socials'].forEach(k=>{
     (incoming[k]||[]).forEach(item=>{
-      const exists=(existing[k]||[]).some(x=>_norm(x.value)===_norm(item.value));
+      if(!item||!item.value) return;
+      const norm = k==='phones' ? _normPhone(item.value) : k==='emails' ? _normEmail(item.value) : _norm(item.value);
+      if(!norm) return;
+      const exists=(existing[k]||[]).some(x=>{
+        const eNorm = k==='phones' ? _normPhone(x.value) : k==='emails' ? _normEmail(x.value) : _norm(x.value);
+        return eNorm===norm;
+      });
       if(!exists){ existing[k]=existing[k]||[]; existing[k].push(item); }
     });
   });
@@ -685,21 +712,67 @@ function mergeCandidate(existing, incoming){
   if(!existing.photo && incoming.photo) existing.photo=incoming.photo;
   // Log the merge
   existing.activityLog=existing.activityLog||[];
-  existing.activityLog.push({id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Объединено с данными из импорта',type:'note'});
+  existing.activityLog.push({id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Объединено с данными из импорта (добавлено — без замены)',type:'note'});
   return existing;
+}
+
+// Compute what a merge would change — used to preview "what's new" in the duplicate modal.
+// Returns { adds: [{label, value}], fills: [{label, value, isEmpty}], noop: bool }
+function computeMergeDiff(existing, incoming){
+  const adds=[]; // new list items (phone, email, file, social)
+  const fills=[]; // empty scalar fields that would get filled
+  const scalarFields=[
+    ['position','Должность'],['company','Компания'],['citizenship','Гражданство'],
+    ['currentCompany','Тек. компания'],['currentRole','Тек. роль'],['currentTenure','Срок работы'],
+    ['sourcedAt','Дата внесения'],['vacancyText','Вакансия (текст)']
+  ];
+  scalarFields.forEach(([k,label])=>{
+    if(incoming[k] && !existing[k]) fills.push({label, value:incoming[k]});
+  });
+  // Salary expansion
+  if(incoming.salaryMin && (!existing.salaryMin || incoming.salaryMin<existing.salaryMin) && incoming.salaryMin!==existing.salaryMin)
+    fills.push({label:'ЗП от', value:incoming.salaryMin+' ₽'});
+  if(incoming.salaryMax && incoming.salaryMax>existing.salaryMax)
+    fills.push({label:'ЗП до', value:incoming.salaryMax+' ₽'});
+  // New phones / emails / socials
+  (incoming.phones||[]).forEach(p=>{
+    if(!p||!p.value) return;
+    const np=_normPhone(p.value); if(!np) return;
+    if(!(existing.phones||[]).some(x=>_normPhone(x.value)===np)) adds.push({label:'Телефон', value:p.value});
+  });
+  (incoming.emails||[]).forEach(e=>{
+    if(!e||!e.value) return;
+    const ne=_normEmail(e.value); if(!ne) return;
+    if(!(existing.emails||[]).some(x=>_normEmail(x.value)===ne)) adds.push({label:'Email', value:e.value});
+  });
+  (incoming.socials||[]).forEach(s=>{
+    if(!s||!s.value) return;
+    if(!(existing.socials||[]).some(x=>_norm(x.value)===_norm(s.value))) adds.push({label:s.type||'Соцсеть', value:s.value});
+  });
+  (incoming.files||[]).forEach(f=>{
+    if(!(existing.files||[]).some(x=>x.name===f.name && x.size===f.size)) adds.push({label:'Файл', value:f.name});
+  });
+  // Notes — always an append
+  if(incoming.notes && incoming.notes.trim()){
+    adds.push({label:'Заметки', value:incoming.notes.length>80 ? incoming.notes.slice(0,80)+'…' : incoming.notes});
+  }
+  // Photo
+  if(!existing.photo && incoming.photo) adds.push({label:'Фото', value:'📸 будет добавлено'});
+  return { adds, fills, noop: adds.length===0 && fills.length===0 };
 }
 // Bulk-import dedupe strategy chooser — asks user once for the whole batch
 // Returns promise resolving to 'skip'|'merge'|'both'|'ask' or null if cancelled
 function askDedupeStrategy(importName){
   return new Promise((resolve)=>{
     const html = '<div style="font-size:13px;line-height:1.5">' +
-      '<p style="color:#6b87b0;margin-bottom:12px">Что делать если контакт уже существует в базе?</p>' +
+      '<p style="color:#6b87b0;margin-bottom:10px">Если контакт уже есть в базе (совпадает имя, телефон или email), что делать?</p>' +
+      '<div style="padding:10px;background:#e8f4ff;border-radius:10px;border-left:3px solid #1e7de8;margin-bottom:6px"><div style="font-weight:700;color:#1e7de8;margin-bottom:3px">✨ Умное обновление (рекомендуется)</div><div style="font-size:11px;color:#6b87b0">Добавит новую информацию к существующему контакту без удаления или замены старых данных. Только дополняет — новые телефоны, emails, файлы, заметки, гражданство и т.д.</div></div>' +
       '</div>';
-    showModal('🔍 '+importName+': стратегия дубликатов', html, [
-      { text:'🔄 Обновить существующие', cls:'primary', action:function(){ closeModal(); resolve('merge'); }},
+    showModal('🔍 '+importName+': дубликаты', html, [
+      { text:'✨ Умное обновление (дополнить)', cls:'primary', action:function(){ closeModal(); resolve('merge'); }},
+      { text:'❓ Показать и решить по каждому', action:function(){ closeModal(); resolve('ask'); }},
       { text:'➕ Всегда добавлять новый', action:function(){ closeModal(); resolve('both'); }},
       { text:'⏭ Пропускать дубли', action:function(){ closeModal(); resolve('skip'); }},
-      { text:'❓ Спрашивать каждый раз', action:function(){ closeModal(); resolve('ask'); }},
       { text:'Отмена', action:function(){ closeModal(); resolve(null); }}
     ]);
   });
@@ -949,20 +1022,39 @@ function smartAddCandidate(newCand, opts){
     if((dup.phones||[]).some(p=>newPhones.includes(_normPhone(p.value)))) matchReason.push('совпадает телефон');
     const newEmails=(newCand.emails||[]).map(e=>_normEmail(e.value));
     if((dup.emails||[]).some(e=>newEmails.includes(_normEmail(e.value)))) matchReason.push('совпадает email');
+    // Preview of what the merge would add/fill — drives the "upgrade vs replace" UX
+    const diff = computeMergeDiff(dup, newCand);
+    const escH=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
     let html = '<div style="font-size:13px;line-height:1.5">';
     html += '<div style="padding:10px;background:#fff4e6;border-radius:10px;margin-bottom:10px;border-left:3px solid #f59e0b"><b>⚠️ Похоже на дубликат</b><div style="font-size:11px;color:#7a5000;margin-top:3px">Причина: '+matchReason.join(', ')+'</div></div>';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">';
-    html += '<div style="padding:8px;background:#f0f7ff;border-radius:10px"><div style="font-size:10px;color:#6b87b0;font-weight:700;margin-bottom:4px">СУЩЕСТВУЕТ</div><div style="font-weight:700">'+(dup.name||'—')+'</div><div style="font-size:11px;color:#6b87b0">'+(dup.position||'—')+(dup.company?' · '+dup.company:'')+'</div>';
-    if((dup.phones||[]).length) html += '<div style="font-size:11px;margin-top:2px">📞 '+dup.phones[0].value+'</div>';
-    if((dup.emails||[]).length) html += '<div style="font-size:11px">✉️ '+dup.emails[0].value+'</div>';
+    html += '<div style="padding:8px;background:#f0f7ff;border-radius:10px"><div style="font-size:10px;color:#6b87b0;font-weight:700;margin-bottom:4px">СУЩЕСТВУЕТ</div><div style="font-weight:700">'+escH(dup.name||'—')+'</div><div style="font-size:11px;color:#6b87b0">'+escH(dup.position||'—')+(dup.company?' · '+escH(dup.company):'')+'</div>';
+    if((dup.phones||[]).length) html += '<div style="font-size:11px;margin-top:2px">📞 '+escH(dup.phones[0].value)+'</div>';
+    if((dup.emails||[]).length) html += '<div style="font-size:11px">✉️ '+escH(dup.emails[0].value)+'</div>';
     html += '</div>';
-    html += '<div style="padding:8px;background:#e8f4ff;border-radius:10px;border:1.5px solid #1e7de8"><div style="font-size:10px;color:#1e7de8;font-weight:700;margin-bottom:4px">НОВЫЙ</div><div style="font-weight:700">'+(newCand.name||'—')+'</div><div style="font-size:11px;color:#6b87b0">'+(newCand.position||'—')+(newCand.company?' · '+newCand.company:'')+'</div>';
-    if((newCand.phones||[]).length) html += '<div style="font-size:11px;margin-top:2px">📞 '+newCand.phones[0].value+'</div>';
-    if((newCand.emails||[]).length) html += '<div style="font-size:11px">✉️ '+newCand.emails[0].value+'</div>';
+    html += '<div style="padding:8px;background:#e8f4ff;border-radius:10px;border:1.5px solid #1e7de8"><div style="font-size:10px;color:#1e7de8;font-weight:700;margin-bottom:4px">НОВЫЙ</div><div style="font-weight:700">'+escH(newCand.name||'—')+'</div><div style="font-size:11px;color:#6b87b0">'+escH(newCand.position||'—')+(newCand.company?' · '+escH(newCand.company):'')+'</div>';
+    if((newCand.phones||[]).length) html += '<div style="font-size:11px;margin-top:2px">📞 '+escH(newCand.phones[0].value)+'</div>';
+    if((newCand.emails||[]).length) html += '<div style="font-size:11px">✉️ '+escH(newCand.emails[0].value)+'</div>';
     html += '</div></div>';
+    // Merge preview — what would be added if user picks "Умное обновление"
+    if(!diff.noop){
+      html += '<div style="padding:10px;background:#e8f9ef;border-radius:10px;border-left:3px solid #22c55e;margin-bottom:10px">';
+      html += '<div style="font-size:12px;font-weight:700;color:#0a9e7e;margin-bottom:6px">✨ Что добавится в существующий контакт:</div>';
+      const all = [...diff.fills.map(f=>({...f,kind:'fill'})), ...diff.adds.map(a=>({...a,kind:'add'}))];
+      html += '<div style="max-height:140px;overflow-y:auto">';
+      all.forEach(item=>{
+        const icon = item.kind==='fill' ? '📝' : '➕';
+        html += '<div style="font-size:11px;color:#0a6b55;padding:2px 0"><b>'+icon+' '+escH(item.label)+':</b> '+escH(item.value)+'</div>';
+      });
+      html += '</div>';
+      html += '<div style="font-size:10px;color:#0a9e7e;margin-top:6px;font-style:italic">Существующие данные не изменятся — только добавится новое.</div>';
+      html += '</div>';
+    } else {
+      html += '<div style="padding:8px;background:#f5f5f5;border-radius:10px;font-size:12px;color:#6b87b0;margin-bottom:10px">В новом контакте нет дополнительной информации — все поля уже есть в существующем.</div>';
+    }
     html += '</div>';
     showModal('🔍 Найден дубликат', html, [
-      { text:'🔄 Обновить существующий', cls:'primary', action:function(){
+      { text: diff.noop ? '🔄 Пересохранить (нет изменений)' : '✨ Умное обновление (дополнить)', cls:'primary', action:function(){
         mergeCandidate(dup, newCand);
         closeModal();
         resolve({action:'merged', candidate:dup});
@@ -1162,17 +1254,23 @@ function renderDashboard(){
 }
 
 // ── SCREEN 1: CANDIDATES ──
-let candSearch='',candFilters={status:'',source:''},candView='list',candFilterOpen=false;
+let candSearch='',candFilters={status:'',source:'',citizenship:''},candView='list',candFilterOpen=false;
 
 function renderCandidates(){
   const el=document.getElementById('screen-1');
   const q=candSearch.toLowerCase();
   let filtered=candidates.filter(c=>{
-    if(q&&!c.name.toLowerCase().includes(q)&&!c.position.toLowerCase().includes(q))return false;
+    if(q){
+      const hay=[c.name,c.position,c.company,c.currentCompany,c.currentRole,c.citizenship,c.notes].map(s=>(s||'').toLowerCase()).join(' ');
+      if(!hay.includes(q)) return false;
+    }
     if(candFilters.status&&c.status!==candFilters.status)return false;
     if(candFilters.source&&c.source!==candFilters.source)return false;
+    if(candFilters.citizenship && (c.citizenship||'').toLowerCase()!==candFilters.citizenship.toLowerCase()) return false;
     return true;
   });
+  // Dynamic citizenship list — only show chips for values that exist
+  const citizens = Array.from(new Set(candidates.map(c=>c.citizenship).filter(Boolean))).sort();
   el.innerHTML=`
 <div class="search-row">
   <input class="search-input" placeholder="🔍 Поиск…" value="${candSearch.replace(/"/g,'&quot;')}" oninput="candSearch=this.value;renderCandidates()">
@@ -1186,17 +1284,23 @@ ${candFilterOpen?`
 <div class="filter-chips">
   <div class="chip${!candFilters.source?' active':''}" onclick="candFilters.source='';renderCandidates()">Все источники</div>
   ${Object.entries(SOURCES).map(([k,v])=>`<div class="chip${candFilters.source===k?' active':''}" onclick="candFilters.source='${k}';renderCandidates()">${v}</div>`).join('')}
-</div>`:''}
+</div>
+${citizens.length?`<div class="filter-chips">
+  <div class="chip${!candFilters.citizenship?' active':''}" onclick="candFilters.citizenship='';renderCandidates()">🌍 Все гражд.</div>
+  ${citizens.map(ct=>`<div class="chip${candFilters.citizenship===ct?' active':''}" onclick="candFilters.citizenship='${ct.replace(/'/g,'\\\'')}';renderCandidates()">${ct}</div>`).join('')}
+</div>`:''}`:''}
 <div class="view-toggle">
   <button class="view-btn${candView==='list'?' active':''}" onclick="candView='list';renderCandidates()">☰ Список</button>
   <button class="view-btn${candView==='kanban'?' active':''}" onclick="candView='kanban';renderCandidates()">⊞ Воронка</button>
 </div>
-${candView==='list'?(filtered.length?filtered.map(c=>`
+${candView==='list'?(filtered.length?filtered.map(c=>{
+  const subLine = (c.currentRole||c.currentCompany) ? (c.currentRole||'')+(c.currentRole&&c.currentCompany?' @ ':'')+(c.currentCompany||'') : (c.position+(c.company?' · '+c.company:''));
+  return `
   <div class="candidate-card" onclick="openCandidateDetail('${c.id}')">
     ${avatarHTML(c.name,44,c.photo)}
     <div class="card-info">
-      <div class="card-name">${c.name}</div>
-      <div class="card-position">${c.position}${c.company?' · '+c.company:''}</div>
+      <div class="card-name">${c.name}${c.citizenship?` <span style="font-size:10px;color:#6b87b0;font-weight:500">· ${c.citizenship}</span>`:''}</div>
+      <div class="card-position">${subLine}</div>
       <div class="card-meta">
         <span class="status-pill status-${c.status}">${STATUSES[c.status]||c.status}</span>
         <span class="stars">${starsStr(c.rating)}</span>
@@ -1204,7 +1308,8 @@ ${candView==='list'?(filtered.length?filtered.map(c=>`
         ${c.source?`<span class="source-badge">${SOURCES[c.source]||c.source}</span>`:''}
       </div>
     </div>
-  </div>`).join(''):'<div class="empty-state"><div class="es-emoji">👥</div><p>Кандидаты не найдены</p></div>')
+  </div>`;
+}).join(''):'<div class="empty-state"><div class="es-emoji">👥</div><p>Кандидаты не найдены</p></div>')
 :renderKanban(filtered)}`;
 }
 
@@ -1252,7 +1357,7 @@ function openCandidateDetail(id){
 <div class="detail-header">
   ${avatarHTML(c.name,52,c.photo)}
   <div>
-    <div class="detail-name">${c.name}</div>
+    <div class="detail-name">${c.name}${c.citizenship?` <span style="font-size:11px;color:#6b87b0;font-weight:500;margin-left:4px">🌍 ${c.citizenship}</span>`:''}</div>
     <div class="detail-position">${c.position||'—'}</div>
     ${c.company?`<div class="detail-company">${c.company}</div>`:''}
   </div>
@@ -1261,11 +1366,19 @@ function openCandidateDetail(id){
 <div class="status-row">
   ${STATUS_ORDER.map(s=>`<span class="status-pick status-pill status-${s}${c.status===s?' active':''}" onclick="setCandStatus('${id}','${s}')">${STATUSES[s]}</span>`).join('')}
 </div>
+${(c.currentCompany||c.currentRole||c.currentTenure)?`
+<div style="padding:10px;background:#f7faff;border-radius:10px;border-left:3px solid #1e7de8;margin-bottom:10px;font-size:12px">
+  <div style="font-size:10px;color:#6b87b0;font-weight:700;text-transform:uppercase;margin-bottom:4px">💼 Текущий опыт</div>
+  ${c.currentRole?`<div style="font-weight:700">${c.currentRole}</div>`:''}
+  ${c.currentCompany?`<div style="color:#6b87b0">${c.currentCompany}</div>`:''}
+  ${c.currentTenure?`<div style="font-size:11px;color:#6b87b0;margin-top:2px">${c.currentTenure}</div>`:''}
+</div>`:''}
 <div class="info-grid">
-  <div class="info-cell"><div class="info-cell-label">💼 Вакансия</div><div class="info-cell-value">${vac?vac.title:'—'}</div></div>
+  <div class="info-cell"><div class="info-cell-label">💼 Вакансия</div><div class="info-cell-value">${vac?vac.title:(c.vacancyText||'—')}</div></div>
   <div class="info-cell"><div class="info-cell-label">💰 Зарплата</div><div class="info-cell-value">${fmtSalary(c.salaryMin,c.salaryMax)}</div></div>
   <div class="info-cell"><div class="info-cell-label">📅 Собеседование</div><div class="info-cell-value">${fmtDate(c.interviewDate)}</div></div>
   <div class="info-cell"><div class="info-cell-label">📌 Следующий шаг</div><div class="info-cell-value">${fmtDate(c.nextAction)}</div></div>
+  ${c.sourcedAt?`<div class="info-cell"><div class="info-cell-label">📥 Дата внесения</div><div class="info-cell-value">${fmtDate(c.sourcedAt)}</div></div>`:''}
 </div>
 <div class="quick-actions">
   ${phone?`<a class="quick-btn" href="${phoneUrl}"><span class="qb-icon">📞</span><span class="qb-label">Позвонить</span></a>`:`<div class="quick-btn quick-btn-empty" onclick="openEditCandidate('${id}')" title="Добавить телефон"><span class="qb-icon">📞</span><span class="qb-label">Добавить</span><span class="qb-plus">+</span></div>`}
@@ -1342,8 +1455,17 @@ function openCandidateForm(id){pendingCandPhoto=null;
   <input type="file" id="cf-photo-input" accept="image/*" onchange="previewCandPhoto(this)" style="position:absolute;opacity:0;width:1px;height:1px">
   <div style="flex:1"><div class="form-group" style="margin-bottom:0"><label class="form-label">ФИО *</label><input class="form-input" id="cf-name" value="${esc(c?c.name:'')}" placeholder="Иван Иванов"></div></div>
 </div>
-<div class="form-group"><label class="form-label">Должность</label><input class="form-input" id="cf-pos" value="${esc(c?c.position:'')}" placeholder="Frontend Developer"></div>
+<div class="form-group"><label class="form-label">Должность (желаемая)</label><input class="form-input" id="cf-pos" value="${esc(c?c.position:'')}" placeholder="Frontend Developer"></div>
 <div class="form-group"><label class="form-label">Компания</label><input class="form-input" id="cf-co" value="${esc(c?c.company||'':'')}" placeholder="Яндекс"></div>
+<div class="form-group"><label class="form-label">Гражданство</label><input class="form-input" id="cf-cit" value="${esc(c?c.citizenship||'':'')}" placeholder="РФ"></div>
+<details style="margin:0 0 10px;padding:8px 10px;background:#f7faff;border-radius:10px;border:1px solid #e0e8f2"${c&&(c.currentCompany||c.currentRole||c.currentTenure)?' open':''}>
+  <summary style="font-size:12px;font-weight:700;color:#1e7de8;cursor:pointer;user-select:none">💼 Текущий опыт работы</summary>
+  <div style="margin-top:8px">
+    <div class="form-group"><label class="form-label">Текущая компания</label><input class="form-input" id="cf-ccom" value="${esc(c?c.currentCompany||'':'')}" placeholder="Предыдущее место работы"></div>
+    <div class="form-group"><label class="form-label">Текущая роль</label><input class="form-input" id="cf-crole" value="${esc(c?c.currentRole||'':'')}" placeholder="CEO, Директор по ..."></div>
+    <div class="form-group" style="margin-bottom:0"><label class="form-label">Срок / период</label><input class="form-input" id="cf-ctenure" value="${esc(c?c.currentTenure||'':'')}" placeholder="ноябрь 2015 – н.в."></div>
+  </div>
+</details>
 <div class="form-group"><label class="form-label">Телефон</label><input class="form-input" id="cf-ph" value="${esc(c&&c.phones[0]?c.phones[0].value:'')}" placeholder="+7 900 000-00-00"></div>
 <div class="form-group"><label class="form-label">WhatsApp (если другой)</label><input class="form-input" id="cf-wa" value="${esc(waVal)}" placeholder="+7 900 000-00-00"></div>
 <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="cf-em" value="${esc(c&&c.emails[0]?c.emails[0].value:'')}" placeholder="email@example.com"></div>
@@ -1356,6 +1478,7 @@ function openCandidateForm(id){pendingCandPhoto=null;
 <div class="form-group"><label class="form-label">Зарплата до (₽)</label><input class="form-input" id="cf-s2" type="number" value="${c?c.salaryMax||'':''}" placeholder="200000"></div>
 <div class="form-group"><label class="form-label">Дата собеседования</label><input class="form-input" id="cf-id" type="date" value="${c?c.interviewDate||'':''}"></div>
 <div class="form-group"><label class="form-label">Следующий шаг</label><input class="form-input" id="cf-nd" type="date" value="${c?c.nextAction||'':''}"></div>
+<div class="form-group"><label class="form-label">Дата внесения (из источника)</label><input class="form-input" id="cf-srcdate" type="date" value="${c?c.sourcedAt||'':''}"></div>
 <div class="form-group"><label class="form-label">Заметки</label><textarea class="form-textarea" id="cf-no">${c?c.notes||'':''}</textarea></div>
 <button class="btn-primary" onclick="saveCandForm('${id||''}')">💾 Сохранить</button>
 <button class="btn-secondary" onclick="closeSheet()">Отмена</button>
@@ -1375,7 +1498,8 @@ function saveCandForm(id){
   if(wa&&wa!==ph)phones.push({type:'WhatsApp',value:wa});
   const emails=em?[{type:'work',value:em}]:[];
   const socials=tg?[{type:'Telegram',value:tg}]:[];
-  const data={name,position:document.getElementById('cf-pos').value.trim(),company:document.getElementById('cf-co').value.trim(),status:document.getElementById('cf-st').value,vacancy:document.getElementById('cf-vac').value,source:document.getElementById('cf-src').value,rating:_stars,salaryMin:parseInt(document.getElementById('cf-s1').value)||0,salaryMax:parseInt(document.getElementById('cf-s2').value)||0,interviewDate:document.getElementById('cf-id').value,nextAction:document.getElementById('cf-nd').value,notes:document.getElementById('cf-no').value.trim(),phones,emails,socials,photo:(typeof pendingCandPhoto!=='undefined'&&pendingCandPhoto)?pendingCandPhoto:(id&&candidates.find(x=>x.id===id)?candidates.find(x=>x.id===id).photo:null)};
+  const _val=id2=>{ const el=document.getElementById(id2); return el?el.value.trim():''; };
+  const data={name,position:document.getElementById('cf-pos').value.trim(),company:document.getElementById('cf-co').value.trim(),citizenship:_val('cf-cit'),currentCompany:_val('cf-ccom'),currentRole:_val('cf-crole'),currentTenure:_val('cf-ctenure'),sourcedAt:_val('cf-srcdate'),status:document.getElementById('cf-st').value,vacancy:document.getElementById('cf-vac').value,source:document.getElementById('cf-src').value,rating:_stars,salaryMin:parseInt(document.getElementById('cf-s1').value)||0,salaryMax:parseInt(document.getElementById('cf-s2').value)||0,interviewDate:document.getElementById('cf-id').value,nextAction:document.getElementById('cf-nd').value,notes:document.getElementById('cf-no').value.trim(),phones,emails,socials,photo:(typeof pendingCandPhoto!=='undefined'&&pendingCandPhoto)?pendingCandPhoto:(id&&candidates.find(x=>x.id===id)?candidates.find(x=>x.id===id).photo:null)};
   if(id){const c=candidates.find(x=>x.id===id);Object.assign(c,data);addLog(c,'Данные обновлены');pendingCandPhoto=null;saveData();closeSheet();renderScreen(currentTab);return;}
   // New candidate — check for duplicates
   const newCand={id:genId(),...data,files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Кандидат добавлен',type:'note'}]};
@@ -2589,23 +2713,24 @@ function doExport(){
 `);
 }
 function exportCSV(){
-  const hdr=['name','position','company','status','source','rating','salaryMin','salaryMax','vacancy','interviewDate','nextAction','phones','emails','socials','notes','created'];
-  const rows=candidates.map(c=>[c.name,c.position,c.company,c.status,c.source,c.rating,c.salaryMin,c.salaryMax,(vacancies.find(v=>v.id===c.vacancy)||{}).title||'',c.interviewDate,c.nextAction,c.phones.map(p=>p.value).join(';'),c.emails.map(e=>e.value).join(';'),c.socials.map(s=>s.value).join(';'),(c.notes||'').replace(/,/g,';'),c.created].map(v=>`"${v||''}"`).join(','));
+  const hdr=['name','position','company','citizenship','currentCompany','currentRole','currentTenure','sourcedAt','vacancyText','status','source','rating','salaryMin','salaryMax','vacancy','interviewDate','nextAction','phones','emails','socials','notes','created'];
+  const rows=candidates.map(c=>[c.name,c.position,c.company,c.citizenship||'',c.currentCompany||'',c.currentRole||'',c.currentTenure||'',c.sourcedAt||'',c.vacancyText||'',c.status,c.source,c.rating,c.salaryMin,c.salaryMax,(vacancies.find(v=>v.id===c.vacancy)||{}).title||'',c.interviewDate,c.nextAction,c.phones.map(p=>p.value).join(';'),c.emails.map(e=>e.value).join(';'),c.socials.map(s=>s.value).join(';'),(c.notes||'').replace(/,/g,';').replace(/\n/g,' / '),c.created].map(v=>`"${String(v||'').replace(/"/g,'""')}"`).join(','));
   const blob=new Blob(['\uFEFF'+[hdr.join(','),...rows].join('\n')],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ischu-svishchu-export.csv';document.body.appendChild(a);a.click();document.body.removeChild(a);
   closeSheet();
 }
 function exportExcel(){
   // Generate real XLSX using XML (no library needed)
-  const hdr=['Имя','Должность','Компания','Статус','Источник','Рейтинг','ЗП от','ЗП до','Вакансия','Собеседование','След. шаг','Телефоны','Email','Соцсети','Заметки','Создан'];
+  const hdr=['Имя','Должность','Компания','Гражданство','Тек. компания','Тек. роль','Срок работы','Дата внесения','Вакансия (текст)','Статус','Источник','Рейтинг','ЗП от','ЗП до','Вакансия','Собеседование','След. шаг','Телефоны','Email','Соцсети','Заметки','Создан'];
   const escXml=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   let rows='';
   // Header row
   rows+=`<Row>${hdr.map(h=>`<Cell><Data ss:Type="String">${escXml(h)}</Data></Cell>`).join('')}</Row>\n`;
   candidates.forEach(c=>{
-    const vals=[c.name,c.position,c.company,c.status,c.source,c.rating,c.salaryMin,c.salaryMax,(vacancies.find(v=>v.id===c.vacancy)||{}).title||'',c.interviewDate,c.nextAction,c.phones.map(p=>p.value).join('; '),c.emails.map(e=>e.value).join('; '),c.socials.map(s=>s.value).join('; '),c.notes||'',c.created];
+    const vals=[c.name,c.position,c.company,c.citizenship||'',c.currentCompany||'',c.currentRole||'',c.currentTenure||'',c.sourcedAt||'',c.vacancyText||'',c.status,c.source,c.rating,c.salaryMin,c.salaryMax,(vacancies.find(v=>v.id===c.vacancy)||{}).title||'',c.interviewDate,c.nextAction,c.phones.map(p=>p.value).join('; '),c.emails.map(e=>e.value).join('; '),c.socials.map(s=>s.value).join('; '),c.notes||'',c.created];
     rows+=`<Row>${vals.map((v,i)=>{
-      const tp=(i===5||i===6||i===7)?'Number':'String';
+      // Rating=11, salaryMin=12, salaryMax=13 are numbers
+      const tp=(i===11||i===12||i===13)?'Number':'String';
       return `<Cell><Data ss:Type="${tp}">${escXml(v)}</Data></Cell>`;
     }).join('')}</Row>\n`;
   });
@@ -2872,6 +2997,39 @@ function _parseSalary(v){
   return {min:Math.min.apply(null,nums),max:Math.max.apply(null,nums)};
 }
 
+// Parse a multi-line "Текущая позиция" cell into {company, role, tenure}
+// Typical pattern: line1=company, line2=role, line3+=tenure/dates in parens.
+function _parseCurrentPos(s){
+  const lines=String(s||'').split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+  if(!lines.length) return {company:'', role:'', tenure:''};
+  if(lines.length===1) return {company:'', role:lines[0], tenure:''};
+  // If last line looks like dates/tenure (contains year or "мес", "г.", "н.в.") treat as tenure
+  const last=lines[lines.length-1];
+  const isTenure=/\d{4}|мес|год|г\.|н\.в|present|current|\(|\)/i.test(last);
+  if(isTenure && lines.length>=3){
+    return {company:lines[0], role:lines[1], tenure:lines.slice(2).join(' ')};
+  }
+  if(isTenure){
+    return {company:lines[0], role:'', tenure:lines.slice(1).join(' ')};
+  }
+  return {company:lines[0], role:lines[1], tenure:lines.slice(2).join(' ')};
+}
+
+// Parse "14.06.2024", "14/06/2024", "2024-06-14" into ISO YYYY-MM-DD (empty if unparsable)
+function _parseSourcedDate(s){
+  const v=String(s||'').trim();
+  if(!v) return '';
+  if(/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const m=v.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+  if(m){
+    const d=m[1].padStart(2,'0'), mo=m[2].padStart(2,'0');
+    let y=m[3]; if(y.length===2) y=(parseInt(y,10)>50?'19':'20')+y;
+    return y+'-'+mo+'-'+d;
+  }
+  // Excel sometimes passes a serial number — skip rather than guess.
+  return '';
+}
+
 // Build a candidate object from one tabular row using the detected mapping.
 // Returns null if the row has no usable name.
 function _rowToCandidate(row, map, headers){
@@ -2883,13 +3041,15 @@ function _rowToCandidate(row, map, headers){
   const liRaw=_splitMulti(get('linkedin'));
   const statusId=_normalizeStatusValue(get('status'))||'new';
   const sal=_parseSalary(get('salary'));
-  // Build a notes block from non-core fields so no information is lost.
+  // ── Structured extraction for new schema fields ──
+  const cpParsed = _parseCurrentPos(get('currentPos'));
+  const sourcedAt = _parseSourcedDate(get('date'));
+  const citizenship = get('citizenship');
+  const vacancyText = get('vacancy');
+  // Notes keeps ONLY freeform comments + truly-unmapped columns.
   const noteParts=[];
-  const currentPos=get('currentPos'); if(currentPos) noteParts.push('Текущая позиция:\n'+currentPos);
-  const vacancy=get('vacancy'); if(vacancy) noteParts.push('Вакансия: '+vacancy);
-  const citizenship=get('citizenship'); if(citizenship) noteParts.push('Гражданство: '+citizenship);
-  const comments=get('comments'); if(comments) noteParts.push('Комментарии:\n'+comments);
-  // Any unmapped columns with content — include as "Header: value"
+  const comments=get('comments'); if(comments) noteParts.push(comments);
+  // Any unmapped columns with content — include as "Header: value" so nothing is silently lost
   for(let i=0;i<headers.length;i++){
     if(Object.values(map).includes(i)) continue;
     const h=(headers[i]||'').trim(); if(!h) continue;
@@ -2898,6 +3058,8 @@ function _rowToCandidate(row, map, headers){
   }
   return {
     id: genId(), name, position: get('position')||'', company: get('company')||'',
+    citizenship, currentCompany: cpParsed.company, currentRole: cpParsed.role, currentTenure: cpParsed.tenure,
+    sourcedAt, vacancyText,
     status: statusId, source: 'other', vacancy: '', rating: 3,
     salaryMin: sal.min, salaryMax: sal.max,
     interviewDate: '', nextAction: '',
@@ -2908,7 +3070,7 @@ function _rowToCandidate(row, map, headers){
       ...liRaw.map(t=>({type:'LinkedIn',value:t}))
     ],
     notes: noteParts.join('\n\n'),
-    photo: null, files: [], created: todayStr(),
+    photo: null, files: [], created: sourcedAt || todayStr(),
     activityLog: [{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Импорт из таблицы (CSV/Excel)',type:'note'}]
   };
 }
@@ -2925,10 +3087,11 @@ function _renderTabularPreview(headers, aoa, map, prevEl){
     const labels={name:'Имя',phone:'Телефон',email:'Email',position:'Позиция',company:'Компания',status:'Статус',source:'Источник',salary:'ЗП',currentPos:'Тек. позиция',vacancy:'Вакансия',citizenship:'Гражданство',comments:'Комментарии',date:'Дата',telegram:'Telegram',linkedin:'LinkedIn'};
     return `<span style="display:inline-block;padding:2px 8px;background:#e8f4ff;border-radius:8px;font-size:10px;margin:2px">${labels[f]||f} ← «${headers[i]||''}»</span>`;
   }).join(' ');
-  const preview=mapped.slice(0,8).map(c=>`<tr><td>${c.name||'—'}</td><td>${c.position||''}</td><td>${c.company||''}</td><td>${(c.phones[0]||{}).value||''}</td><td>${(c.emails[0]||{}).value||''}</td><td><span class="status-pill status-${c.status}">${STATUSES[c.status]||c.status}</span></td></tr>`).join('');
-  const moreText=mapped.length>8?`<tr><td colspan="6" style="text-align:center;color:#6b87b0;font-size:11px">…ещё ${mapped.length-8} контактов</td></tr>`:'';
+  const escP=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const preview=mapped.slice(0,8).map(c=>`<tr><td>${escP(c.name||'—')}</td><td>${escP(c.position||'')}</td><td>${escP(c.currentRole||'')}${c.currentCompany?`<div style="font-size:10px;color:#6b87b0">${escP(c.currentCompany)}</div>`:''}</td><td>${escP(c.citizenship||'')}</td><td>${escP((c.phones[0]||{}).value||'')}</td><td>${escP((c.emails[0]||{}).value||'')}</td><td><span class="status-pill status-${c.status}">${STATUSES[c.status]||c.status}</span></td></tr>`).join('');
+  const moreText=mapped.length>8?`<tr><td colspan="7" style="text-align:center;color:#6b87b0;font-size:11px">…ещё ${mapped.length-8} контактов</td></tr>`:'';
   const warn=!map.name?'<div style="padding:10px;background:#ffeee8;border-radius:8px;font-size:12px;color:#c62828;margin-bottom:8px">⚠ Не найдена колонка с именем (ФИО). Проверьте первую строку файла — она должна быть заголовками.</div>':'';
-  prevEl.innerHTML=`${warn}<div style="font-size:13px;font-weight:700;margin-bottom:6px">Распознано контактов: ${mapped.length}</div><div style="margin-bottom:8px">${mapSummary||'<span style="font-size:11px;color:#c62828">⚠ Колонки не распознаны</span>'}</div><div class="import-preview"><table style="width:100%;font-size:12px"><tr><th>Имя</th><th>Позиция</th><th>Компания</th><th>Телефон</th><th>Email</th><th>Статус</th></tr>${preview}${moreText}</table></div>`;
+  prevEl.innerHTML=`${warn}<div style="font-size:13px;font-weight:700;margin-bottom:6px">Распознано контактов: ${mapped.length}</div><div style="margin-bottom:8px">${mapSummary||'<span style="font-size:11px;color:#c62828">⚠ Колонки не распознаны</span>'}</div><div class="import-preview"><table style="width:100%;font-size:12px"><tr><th>Имя</th><th>Позиция</th><th>Тек. роль</th><th>Гражд.</th><th>Телефон</th><th>Email</th><th>Статус</th></tr>${preview}${moreText}</table></div>`;
   return mapped.length;
 }
 
@@ -3216,17 +3379,18 @@ function showModal(title, content, buttons) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)';
-  
+
   let btnsHTML = '';
   buttons.forEach(function(b, i) {
     const cls = b.cls === 'primary' ? 'background:#1e7de8;color:white' : 'background:#f0f0f0;color:#333';
-    btnsHTML += '<button data-idx="' + i + '" style="padding:10px 20px;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;' + cls + '">' + b.text + '</button>';
+    btnsHTML += '<button data-idx="' + i + '" style="padding:11px 16px;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;width:100%;' + cls + '">' + b.text + '</button>';
   });
-  
+
+  // Stack buttons vertically — fits 3+ buttons on iPhone (375px) without clipping
   overlay.innerHTML = '<div style="background:white;border-radius:16px;padding:20px;max-width:380px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2)">'
     + '<div style="font-size:17px;font-weight:700;margin-bottom:12px">' + title + '</div>'
     + '<div>' + content + '</div>'
-    + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">' + btnsHTML + '</div></div>';
+    + '<div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">' + btnsHTML + '</div></div>';
   
   overlay.querySelectorAll('button').forEach(function(btn) {
     btn.onclick = function() {
