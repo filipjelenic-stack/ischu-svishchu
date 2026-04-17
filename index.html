@@ -645,9 +645,56 @@ async function saveData(){
 function genId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
 
 // ── DUPLICATE DETECTION ────────────────────
-function _norm(s){return (s||'').toString().toLowerCase().replace(/\s+/g,' ').trim();}
-function _normPhone(p){return (p||'').toString().replace(/\D/g,'').replace(/^8/,'7');}
+// ё → е normalization matters for RU dedup ("Орёл" vs "Орел", "Алёна" vs "Алена")
+function _norm(s){return (s||'').toString().toLowerCase().replace(/ё/g,'е').replace(/\s+/g,' ').trim();}
+// Phone normalization — 11-digit Russian numbers starting with 8 → 7 (canonical),
+// all others keep digits-only (works for +1, +44, +49, etc.)
+function _normPhone(p){
+  const d=(p||'').toString().replace(/\D/g,'');
+  if(d.length===11 && d[0]==='8') return '7'+d.slice(1);
+  return d;
+}
 function _normEmail(e){return (e||'').toString().toLowerCase().trim();}
+
+// ── BILINGUAL VALUE NORMALIZATION (import + form save) ──
+// Maps RU/EN country names to canonical RU form so filters/search don't fragment.
+const CITIZENSHIP_ALIASES = [
+  [/^(рф|рф\.|ru|rf|ru-?ru|russia|russian\s*federation|russian|россия|российск|росс\.?)$/i, 'РФ'],
+  [/^(беларус\S*|белорус\S*|belarus|by)$/i, 'Беларусь'],
+  [/^(казахстан\S*|kazakhstan|kz|казах\S*)$/i, 'Казахстан'],
+  [/^(украин\S*|ukraine|ua)$/i, 'Украина'],
+  [/^(узбекистан\S*|uzbekistan|uz|узбек\S*)$/i, 'Узбекистан'],
+  [/^(кыргыз\S*|киргиз\S*|kyrgyzstan|kg)$/i, 'Кыргызстан'],
+  [/^(армени\S*|armenia|am)$/i, 'Армения'],
+  [/^(грузи\S*|georgia|ge)$/i, 'Грузия'],
+  [/^(азербайдж\S*|azerbaijan|az)$/i, 'Азербайджан'],
+  [/^(таджик\S*|tajikistan|tj)$/i, 'Таджикистан'],
+  [/^(молдов\S*|moldova|md)$/i, 'Молдова'],
+  [/^(туркмен\S*|turkmenistan|tm)$/i, 'Туркменистан'],
+  [/^(беларус|белорус)$/i, 'Беларусь']
+];
+function _normCitizenship(v){
+  const s=String(v||'').trim();
+  if(!s) return '';
+  for(const [rx,canon] of CITIZENSHIP_ALIASES){ if(rx.test(s)) return canon; }
+  return s; // unknown — keep user's freeform text as-is
+}
+
+// Map RU/EN source labels to canonical source ids (keys of SOURCES dict).
+const SOURCE_ALIASES = [
+  [/hh|headhunter|head\s*hunter|хх|хх\.ру|head-hunter/i, 'hh'],
+  [/linkedin|линкед|li\b/i, 'linkedin'],
+  [/referr|реферал|реф\b|рекоменд/i, 'referral'],
+  [/telegram|телеграм|tg\b/i, 'telegram'],
+  [/site|сайт|website|веб\s*сайт/i, 'site'],
+  [/cold|холодн|холодный поиск/i, 'cold']
+];
+function _normalizeSourceValue(v){
+  const s=String(v||'').toLowerCase().trim();
+  if(!s) return '';
+  for(const [rx,id] of SOURCE_ALIASES){ if(rx.test(s)) return id; }
+  return '';
+}
 // Returns existing candidate that duplicates the new one, or null
 function findDuplicate(newCand, excludeId){
   if(!newCand) return null;
@@ -1539,7 +1586,7 @@ function saveCandForm(id){
   const emails=em?[{type:'work',value:em}]:[];
   const socials=tg?[{type:'Telegram',value:tg}]:[];
   const _val=id2=>{ const el=document.getElementById(id2); return el?el.value.trim():''; };
-  const data={name,position:document.getElementById('cf-pos').value.trim(),company:document.getElementById('cf-co').value.trim(),citizenship:_val('cf-cit'),currentCompany:_val('cf-ccom'),currentRole:_val('cf-crole'),currentTenure:_val('cf-ctenure'),sourcedAt:_val('cf-srcdate'),status:document.getElementById('cf-st').value,vacancy:document.getElementById('cf-vac').value,source:document.getElementById('cf-src').value,rating:_stars,salaryMin:parseInt(document.getElementById('cf-s1').value)||0,salaryMax:parseInt(document.getElementById('cf-s2').value)||0,interviewDate:document.getElementById('cf-id').value,nextAction:document.getElementById('cf-nd').value,notes:document.getElementById('cf-no').value.trim(),phones,emails,socials,photo:(typeof pendingCandPhoto!=='undefined'&&pendingCandPhoto)?pendingCandPhoto:(id&&candidates.find(x=>x.id===id)?candidates.find(x=>x.id===id).photo:null)};
+  const data={name,position:document.getElementById('cf-pos').value.trim(),company:document.getElementById('cf-co').value.trim(),citizenship:_normCitizenship(_val('cf-cit')),currentCompany:_val('cf-ccom'),currentRole:_val('cf-crole'),currentTenure:_val('cf-ctenure'),sourcedAt:_val('cf-srcdate'),status:document.getElementById('cf-st').value,vacancy:document.getElementById('cf-vac').value,source:document.getElementById('cf-src').value,rating:_stars,salaryMin:parseInt(document.getElementById('cf-s1').value)||0,salaryMax:parseInt(document.getElementById('cf-s2').value)||0,interviewDate:document.getElementById('cf-id').value,nextAction:document.getElementById('cf-nd').value,notes:document.getElementById('cf-no').value.trim(),phones,emails,socials,photo:(typeof pendingCandPhoto!=='undefined'&&pendingCandPhoto)?pendingCandPhoto:(id&&candidates.find(x=>x.id===id)?candidates.find(x=>x.id===id).photo:null)};
   if(id){const c=candidates.find(x=>x.id===id);Object.assign(c,data);addLog(c,'Данные обновлены');pendingCandPhoto=null;saveData();closeSheet();renderScreen(currentTab);return;}
   // New candidate — check for duplicates
   const newCand={id:genId(),...data,files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Кандидат добавлен',type:'note'}]};
@@ -2929,47 +2976,69 @@ const TABULAR_FIELD_PATTERNS = [
   ['vacancy',     ['вакансия','vacancy']],
   ['status',      ['статус','этап','stage','status','state']],
   ['source',      ['источник','откуда','source','channel']],
-  ['salary',      ['зп','зарплата','оклад','salary','compensation','желаемая','ожидания']],
-  ['citizenship', ['гражданство','citizenship','nationality']],
-  ['comments',    ['комментар','заметк','примечан','comment','note','remark']],
-  ['date',        ['дата внесения','дата добавления','дата','created','added','date']],
-  ['telegram',    ['telegram','телеграм','tg']],
-  ['linkedin',    ['linkedin','линкед']]
+  ['salary',      ['зп','зарплата','оклад','доход','salary','compensation','expected','target','ожидан','желаем','pay','wage']],
+  ['citizenship', ['гражданство','citizenship','nationality','country','страна']],
+  ['comments',    ['комментар','заметк','примечан','comment','note','remark','notes','description','описан']],
+  ['date',        ['дата внесения','дата добавления','дата','created','added','date','sourced']],
+  ['telegram',    ['telegram','телеграм','tg','телега']],
+  ['linkedin',    ['linkedin','линкед','li ']]
 ];
 
 // Russian/English status labels → canonical id. Lowercase substring matching.
+// ORDER MATTERS: more-specific phrases (e.g. "self-reject") come BEFORE shorter
+// substrings that would otherwise steal the match ("reject" → rejected).
 const TABULAR_STATUS_MAP = [
   ['самоотказ',       'selfreject'],
   ['отказ кандидата', 'selfreject'],
   ['отказался',       'selfreject'],
+  ['self-reject',     'selfreject'],
+  ['self reject',     'selfreject'],
+  ['self-reject',     'selfreject'],
+  ['withdrawn',       'selfreject'],
+  ['withdrew',        'selfreject'],
+  ['candidate declined','selfreject'],
   ['не формат',       'rejected'],
   ['не подход',       'rejected'],
   ['отклон',          'rejected'],
   ['отказ',           'rejected'],
   ['reject',          'rejected'],
+  ['declined',        'rejected'],
+  ['passed',          'rejected'],
+  ['not a fit',       'rejected'],
+  ['not fit',         'rejected'],
   ['нанят',           'hired'],
   ['принят',          'hired'],
   ['вышел',           'hired'],
   ['hired',           'hired'],
+  ['onboarded',       'hired'],
+  ['joined',          'hired'],
   ['оффер',           'offer'],
   ['offer',           'offer'],
   ['предложен',       'offer'],
+  ['offered',         'offer'],
   ['интервью',        'interview'],
   ['собесед',         'interview'],
   ['встреч',          'interview'],
   ['interview',       'interview'],
   ['meet',            'interview'],
+  ['on-site',         'interview'],
+  ['onsite',          'interview'],
   ['резерв',          'reserve'],
   ['отлож',           'reserve'],
   ['reserve',         'reserve'],
+  ['on hold',         'reserve'],
+  ['hold',            'reserve'],
   ['скрининг',        'screening'],
   ['первичн',         'screening'],
   ['звонок',          'screening'],
   ['call',            'screening'],
   ['screening',       'screening'],
+  ['phone screen',    'screening'],
   ['новый',           'new'],
   ['нов',             'new'],
-  ['new',             'new']
+  ['new',             'new'],
+  ['lead',            'new'],
+  ['applied',         'new']
 ];
 
 // Read any tabular file (xlsx, xls, csv, tsv) as {headers, aoa} using SheetJS
@@ -3027,10 +3096,19 @@ function _splitMulti(v){
   return String(v).split(/[\r\n;]+|\s{2,}|\s\/\s/).map(x=>x.trim()).filter(Boolean);
 }
 
-// Parse "ЗП 150 000 — 200 000" or "170000" style salary expectations.
+// Parse salary expectations in both Russian ("150 000 — 200 000", "150,5 тыс") and
+// English ("$180,000 - $220,000", "180K-220K") notations.
 function _parseSalary(v){
-  const s=String(v||'').replace(/\s|\u00a0/g,'').replace(/,/g,'.').toLowerCase();
+  if(!v) return {min:0,max:0};
+  let s=String(v).replace(/[\s\u00a0]/g,'').toLowerCase();
   if(!s) return {min:0,max:0};
+  // Expand K-suffix: "180k" → "180000", "1.5k" → "1500"
+  s=s.replace(/(\d+(?:[.,]\d+)?)k(?![a-z])/gi,(m,n)=>String(Math.round(parseFloat(n.replace(',','.'))*1000)));
+  // Strip thousand separators (comma or dot followed by exactly 3 digits), iterated to handle "1,234,567"
+  let prev;
+  do { prev=s; s=s.replace(/(\d)[,.](\d{3})(?=\D|$)/g,'$1$2'); } while(s!==prev);
+  // Remaining comma is Euro-style decimal mark → convert to dot
+  s=s.replace(/,/g,'.');
   const nums=(s.match(/\d+(?:\.\d+)?/g)||[]).map(n=>Math.round(parseFloat(n))).filter(n=>n>1000);
   if(nums.length===0) return {min:0,max:0};
   if(nums.length===1) return {min:nums[0],max:nums[0]};
@@ -3039,13 +3117,13 @@ function _parseSalary(v){
 
 // Parse a multi-line "Текущая позиция" cell into {company, role, tenure}
 // Typical pattern: line1=company, line2=role, line3+=tenure/dates in parens.
+// Tenure regex covers both RU (мес, год, н.в.) and EN (years, yrs, mo, months, now, present) keywords.
 function _parseCurrentPos(s){
   const lines=String(s||'').split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
   if(!lines.length) return {company:'', role:'', tenure:''};
   if(lines.length===1) return {company:'', role:lines[0], tenure:''};
-  // If last line looks like dates/tenure (contains year or "мес", "г.", "н.в.") treat as tenure
   const last=lines[lines.length-1];
-  const isTenure=/\d{4}|мес|год|г\.|н\.в|present|current|\(|\)/i.test(last);
+  const isTenure=/\d{4}|мес|месяц|год|лет|г\.|н\.в|present|current|now|ongoing|years?|yrs?|\bmo\b|months?|mos\b|weeks?|days?|\(|\)|–|—|-/i.test(last);
   if(isTenure && lines.length>=3){
     return {company:lines[0], role:lines[1], tenure:lines.slice(2).join(' ')};
   }
@@ -3055,18 +3133,29 @@ function _parseCurrentPos(s){
   return {company:lines[0], role:lines[1], tenure:lines.slice(2).join(' ')};
 }
 
-// Parse "14.06.2024", "14/06/2024", "2024-06-14" into ISO YYYY-MM-DD (empty if unparsable)
+// Parse DD.MM.YYYY (RU), DD/MM/YYYY (EU), MM/DD/YYYY (US), or ISO 2024-06-14 into
+// canonical YYYY-MM-DD. When ambiguous, uses DD.MM.YYYY (Russian default). When
+// one number clearly >12, picks the unambiguous interpretation automatically.
 function _parseSourcedDate(s){
   const v=String(s||'').trim();
   if(!v) return '';
   if(/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
-  const m=v.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+  // Slash-separated → try US first if unambiguous; dot-separated → always DD.MM (RU convention)
+  const m=v.match(/^(\d{1,2})([./-])(\d{1,2})\2(\d{2,4})$/);
   if(m){
-    const d=m[1].padStart(2,'0'), mo=m[2].padStart(2,'0');
-    let y=m[3]; if(y.length===2) y=(parseInt(y,10)>50?'19':'20')+y;
-    return y+'-'+mo+'-'+d;
+    const a=parseInt(m[1],10), b=parseInt(m[3],10), sep=m[2];
+    let y=m[4]; if(y.length===2) y=(parseInt(y,10)>50?'19':'20')+y;
+    let d, mo;
+    if(a>12 && b<=12){ d=a; mo=b; }          // First >12 → definitely day-first (DD/MM or DD.MM)
+    else if(b>12 && a<=12){ d=b; mo=a; }     // Second >12 → US MM/DD format
+    else if(sep==='/' && a<=12 && b<=12){
+      // Ambiguous slash format — keep DD/MM (default for RU+EU users); matches existing behavior.
+      d=a; mo=b;
+    } else {
+      d=a; mo=b;
+    }
+    return y + '-' + String(mo).padStart(2,'0') + '-' + String(d).padStart(2,'0');
   }
-  // Excel sometimes passes a serial number — skip rather than guess.
   return '';
 }
 
@@ -3084,8 +3173,9 @@ function _rowToCandidate(row, map, headers){
   // ── Structured extraction for new schema fields ──
   const cpParsed = _parseCurrentPos(get('currentPos'));
   const sourcedAt = _parseSourcedDate(get('date'));
-  const citizenship = get('citizenship');
+  const citizenship = _normCitizenship(get('citizenship'));
   const vacancyText = get('vacancy');
+  const srcId = _normalizeSourceValue(get('source'));
   // Notes keeps ONLY freeform comments + truly-unmapped columns.
   const noteParts=[];
   const comments=get('comments'); if(comments) noteParts.push(comments);
@@ -3100,7 +3190,7 @@ function _rowToCandidate(row, map, headers){
     id: genId(), name, position: get('position')||'', company: get('company')||'',
     citizenship, currentCompany: cpParsed.company, currentRole: cpParsed.role, currentTenure: cpParsed.tenure,
     sourcedAt, vacancyText,
-    status: statusId, source: 'other', vacancy: '', rating: 3,
+    status: statusId, source: srcId || 'other', vacancy: '', rating: 3,
     salaryMin: sal.min, salaryMax: sal.max,
     interviewDate: '', nextAction: '',
     phones: phonesRaw.map(p=>({type:'mobile',value:p})),
