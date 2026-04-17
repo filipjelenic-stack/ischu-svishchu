@@ -122,6 +122,7 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
 .status-offer{background:#f3e8ff;color:#7c3aed}
 .status-hired{background:#e8f5e9;color:#2e7d32}
 .status-rejected{background:#ffeee8;color:#c62828}
+.status-selfreject{background:#fef3e6;color:#b35c00}
 .status-reserve{background:#f5f5f5;color:#757575}
 /* SEARCH & FILTER */
 .search-row{display:flex;gap:8px;margin-bottom:12px}
@@ -270,6 +271,7 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.7.2/mammoth.browser.min.js"></script>
 <script src="https://unpkg.com/dexie@3/dist/dexie.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -465,8 +467,8 @@ function showIntro(){
 </div>
 <script>
 // ── CONSTANTS ──
-const STATUSES = {new:'Новый',screening:'Скрининг',interview:'Собеседование',offer:'Оффер',hired:'Принят',rejected:'Отказ',reserve:'Резерв'};
-const STATUS_ORDER = ['new','screening','interview','offer','hired','rejected','reserve'];
+const STATUSES = {new:'Новый',screening:'Скрининг',interview:'Собеседование',offer:'Оффер',hired:'Принят',rejected:'Отказ',selfreject:'Самоотказ',reserve:'Резерв'};
+const STATUS_ORDER = ['new','screening','interview','offer','hired','rejected','selfreject','reserve'];
 const SOURCES = {hh:'hh.ru',linkedin:'LinkedIn',referral:'Реферал',telegram:'Telegram',site:'Сайт',cold:'Холодный поиск',other:'Другое'};
 const ACTION_TYPES = [
   {id:'call',icon:'📞',label:'Позвонить'},
@@ -745,7 +747,7 @@ function collectNotifications(){
     if(c.interviewDate === tomorrow){
       notifs.push({id:'intv_tom_'+c.id,type:'interview',priority:'medium',icon:'📅',title:'Собеседование завтра',subtitle:c.name+(c.position?' · '+c.position:''),action:()=>{closeNotifications();openCandidateDetail(c.id);},cal:{title:'Собеседование: '+c.name,start:c.interviewDate+'T10:00:00',duration:60,note:c.notes||''}});
     }
-    if(c.nextAction && c.nextAction <= today && c.status!=='rejected' && c.status!=='hired'){
+    if(c.nextAction && c.nextAction <= today && c.status!=='rejected' && c.status!=='selfreject' && c.status!=='hired'){
       notifs.push({id:'na_'+c.id,type:'nextaction',priority:c.nextAction<today?'high':'medium',icon:c.nextAction<today?'⚠️':'📌',title:c.nextAction<today?'Просрочено':'Следующий шаг',subtitle:c.name+' — '+fmtDate(c.nextAction),action:()=>{closeNotifications();openCandidateDetail(c.id);}});
     }
   });
@@ -1602,7 +1604,7 @@ ${list.length?list.map(t=>{
     <div style="font-size:36px;margin-bottom:8px">📎</div>
     <div style="font-size:14px;font-weight:600;color:#1e7de8;margin-bottom:4px">Загрузите любой файл</div>
     <div style="font-size:11px;color:#999;margin-bottom:12px">PDF, Word, Excel, фото, скриншот — AI извлечёт контакты</div>
-    <input type="file" id="ai-file-input" accept="image/*,application/pdf,.pdf,application/msword,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,text/plain,.txt,text/csv,.csv,text/vcard,.vcf" onchange="handleAIFileSelect(this)" style="position:absolute;opacity:0;width:1px;height:1px">
+    <input type="file" id="ai-file-input" accept="image/*,application/pdf,.pdf,application/msword,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.ms-excel,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,.xlsm,.xlsb,text/plain,.txt,text/csv,.csv,text/vcard,.vcf" onchange="handleAIFileSelect(this)" style="position:absolute;opacity:0;width:1px;height:1px">
     <span style="display:inline-block;padding:12px 28px;background:#1e7de8;color:white;border:none;border-radius:10px;font-size:15px;font-weight:600;-webkit-tap-highlight-color:transparent">📎 Выбрать файл</span>
   </label>
   <div id="ai-file-name" style="display:none;font-size:12px;color:#666;margin-bottom:8px;padding:8px;background:#f5f5f5;border-radius:8px"></div>
@@ -1709,7 +1711,7 @@ function showImport(){
   <div class="chip" id="imp-tab-email" onclick="switchImpTab('email')">✉️ Email</div>
   <div class="chip" id="imp-tab-file" onclick="switchImpTab('file')">📎 Файл (AI)</div>
   <div class="chip" id="imp-tab-text" onclick="switchImpTab('text')">📝 Текст</div>
-  <div class="chip" id="imp-tab-csv" onclick="switchImpTab('csv')">📄 CSV</div>
+  <div class="chip" id="imp-tab-csv" onclick="switchImpTab('csv')">📄 CSV / Excel</div>
   <div class="chip" id="imp-tab-vcard" onclick="switchImpTab('vcard')">👤 vCard</div>
 </div>
 <div id="imp-iphone">
@@ -1811,8 +1813,8 @@ function showImport(){
   </div>
 </div>
 <div id="imp-csv" style="display:none">
-  <p style="font-size:12px;color:#6b87b0;margin-bottom:8px">CSV / Excel: name, position, company, phone, email, status, source</p>
-  <div class="form-group"><input type="file" id="imp-f" accept=".csv,.tsv,.txt,.vcf" onchange="previewImport(this)" style="width:100%;padding:10px;border:1.5px dashed var(--blue);border-radius:10px;background:#f0f7ff;font-family:'Nunito',sans-serif"></div>
+  <p style="font-size:12px;color:#6b87b0;margin-bottom:8px">CSV / Excel (xlsx, xls): колонки name, position, company, phone, email, status, source. Для произвольных таблиц с фото и смешанной структурой используйте вкладку «Файл (AI)».</p>
+  <div class="form-group"><input type="file" id="imp-f" accept=".csv,.tsv,.txt,.vcf,.xlsx,.xls,.xlsm,.xlsb,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="previewImport(this)" style="width:100%;padding:10px;border:1.5px dashed var(--blue);border-radius:10px;background:#f0f7ff;font-family:'Nunito',sans-serif"></div>
   <div id="imp-prev"></div>
   <button class="btn-primary" id="imp-ok" style="display:none" onclick="confirmImport()">✅ Импортировать</button>
 </div>
@@ -1837,7 +1839,7 @@ function switchImpTab(t){
       const fp=document.createElement('div');
       fp.id='imp-file';
       fp.style.display='none';
-      fp.innerHTML='<label for="ai-file-input" style="display:block;border:2px dashed rgba(30,125,232,.3);border-radius:12px;padding:24px;text-align:center;margin-bottom:12px;background:rgba(30,125,232,.02);cursor:pointer"><div style="font-size:36px;margin-bottom:8px">📎</div><div style="font-size:14px;font-weight:600;color:#1e7de8;margin-bottom:4px">Загрузите любой файл</div><div style="font-size:11px;color:#999;margin-bottom:12px">PDF, Word, Excel, фото, скриншот — AI извлечёт контакты</div><input type="file" id="ai-file-input" accept="image/*,application/pdf,.pdf,application/msword,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,text/plain,.txt,text/csv,.csv,text/vcard,.vcf" onchange="handleAIFileSelect(this)" style="position:absolute;opacity:0;width:1px;height:1px"><span style="display:inline-block;padding:12px 28px;background:#1e7de8;color:white;border:none;border-radius:10px;font-size:15px;font-weight:600">📎 Выбрать файл</span></label><div id="ai-file-name" style="display:none;font-size:12px;color:#666;margin-bottom:8px;padding:8px;background:#f5f5f5;border-radius:8px"></div><button id="ai-file-import-btn" onclick="aiFileImport()" style="display:none;width:100%;padding:12px;background:linear-gradient(135deg,#1e7de8,#6c3cf0);color:white;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer">🤖 AI Анализ и Импорт</button>';
+      fp.innerHTML='<label for="ai-file-input" style="display:block;border:2px dashed rgba(30,125,232,.3);border-radius:12px;padding:24px;text-align:center;margin-bottom:12px;background:rgba(30,125,232,.02);cursor:pointer"><div style="font-size:36px;margin-bottom:8px">📎</div><div style="font-size:14px;font-weight:600;color:#1e7de8;margin-bottom:4px">Загрузите любой файл</div><div style="font-size:11px;color:#999;margin-bottom:12px">PDF, Word, Excel, фото, скриншот — AI извлечёт контакты</div><input type="file" id="ai-file-input" accept="image/*,application/pdf,.pdf,application/msword,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.ms-excel,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,.xlsm,.xlsb,text/plain,.txt,text/csv,.csv,text/vcard,.vcf" onchange="handleAIFileSelect(this)" style="position:absolute;opacity:0;width:1px;height:1px"><span style="display:inline-block;padding:12px 28px;background:#1e7de8;color:white;border:none;border-radius:10px;font-size:15px;font-weight:600">📎 Выбрать файл</span></label><div id="ai-file-name" style="display:none;font-size:12px;color:#666;margin-bottom:8px;padding:8px;background:#f5f5f5;border-radius:8px"></div><button id="ai-file-import-btn" onclick="aiFileImport()" style="display:none;width:100%;padding:12px;background:linear-gradient(135deg,#1e7de8,#6c3cf0);color:white;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer">🤖 AI Анализ и Импорт</button>';
       vcard.parentElement.insertBefore(fp,vcard.nextSibling);
     }
   }
@@ -2746,16 +2748,22 @@ function fmtFileSize(b){if(b<1024)return b+'Б';if(b<1048576)return (b/1024).toF
 function fileIcon(name){const ext=(name||'').split('.').pop().toLowerCase();const m={'pdf':'📕','doc':'📘','docx':'📘','xls':'📗','xlsx':'📗','jpg':'🖼','jpeg':'🖼','png':'🖼','gif':'🖼','txt':'📄','zip':'📦','rar':'📦'};return m[ext]||'📎';}
 
 // CSV preview (for import CSV tab)
-function previewImport(inp){
+async function previewImport(inp){
   const f=inp.files[0];if(!f)return;
+  const name=(f.name||'').toLowerCase();
   // Check if vCard
-  if(f.name.endsWith('.vcf')){parseVCard(inp);return;}
-  const r=new FileReader();
-  r.onload=e=>{
-    const text=e.target.result.trim();
-    const lines=text.split('\n');
-    if(lines.length<2)return;
-    // Detect delimiter
+  if(name.endsWith('.vcf')){parseVCard(inp);return;}
+  const prev=document.getElementById('imp-prev');
+  const btn=document.getElementById('imp-ok');
+
+  // Helper: given a CSV/TSV text blob, populate importRows + preview table
+  function renderCsvText(text){
+    const trimmed=(text||'').trim();
+    const lines=trimmed.split(/\r?\n/);
+    if(lines.length<2){
+      if(prev) prev.innerHTML='<div style="padding:10px;background:#fff4e6;border-radius:8px;font-size:12px;color:#7a5000">⚠ Нужна хотя бы одна строка заголовков и одна строка данных.</div>';
+      return;
+    }
     const firstLine=lines[0];
     let delim=',';
     if(firstLine.split('\t').length>firstLine.split(',').length)delim='\t';
@@ -2765,11 +2773,43 @@ function previewImport(inp){
       const v=l.split(delim).map(x=>x.trim().replace(/^"|"$/g,''));
       const o={};hdrs.forEach((h,i)=>o[h]=v[i]||'');return o;
     });
-    const prev=document.getElementById('imp-prev');const btn=document.getElementById('imp-ok');
     if(!prev)return;
     prev.innerHTML=`<div style="font-size:13px;font-weight:600;margin-bottom:8px">Найдено: ${importRows.length}</div><div class="import-preview"><table><tr>${hdrs.map(h=>`<th>${h}</th>`).join('')}</tr>${importRows.slice(0,5).map(row=>`<tr>${hdrs.map(h=>`<td>${row[h]||''}</td>`).join('')}</tr>`).join('')}${importRows.length>5?`<tr><td colspan="${hdrs.length}" style="text-align:center;color:#6b87b0">...ещё ${importRows.length-5}</td></tr>`:''}</table></div>`;
     if(btn)btn.style.display='block';
-  };
+  }
+
+  // Excel branch: use SheetJS to read the first non-empty sheet as CSV.
+  const isExcel = name.endsWith('.xlsx')||name.endsWith('.xls')||name.endsWith('.xlsm')||name.endsWith('.xlsb');
+  if(isExcel){
+    if(!window.XLSX){
+      if(prev) prev.innerHTML='<div style="padding:10px;background:#ffeee8;border-radius:8px;font-size:12px;color:#c62828">⚠ Библиотека Excel не загрузилась. Проверьте интернет и обновите страницу, либо используйте вкладку «Файл (AI)».</div>';
+      return;
+    }
+    try{
+      if(prev) prev.innerHTML='<div style="padding:10px;background:#f5f5f5;border-radius:8px;font-size:12px;text-align:center">⏳ Чтение Excel-файла...</div>';
+      const ab=await _readAB(f);
+      const wb=XLSX.read(ab,{type:'array'});
+      // Pick first sheet that has data
+      let csvText='';
+      for(const sn of wb.SheetNames){
+        const ws=wb.Sheets[sn]; if(!ws) continue;
+        const c=XLSX.utils.sheet_to_csv(ws,{blankrows:false,strip:true});
+        if(c && c.trim()){ csvText=c; break; }
+      }
+      if(!csvText){
+        if(prev) prev.innerHTML='<div style="padding:10px;background:#fff4e6;border-radius:8px;font-size:12px;color:#7a5000">⚠ В файле не найдено данных. Если таблица сложная (с фото, несколькими листами) — используйте вкладку «Файл (AI)».</div>';
+        return;
+      }
+      renderCsvText(csvText);
+    }catch(err){
+      if(prev) prev.innerHTML='<div style="padding:10px;background:#ffeee8;border-radius:8px;font-size:12px;color:#c62828">⚠ Ошибка чтения Excel: '+(err.message||err)+'. Попробуйте вкладку «Файл (AI)».</div>';
+    }
+    return;
+  }
+
+  // Plain text CSV/TSV branch
+  const r=new FileReader();
+  r.onload=e=>{ renderCsvText(e.target.result||''); };
   r.readAsText(f,'UTF-8');
 }
 function confirmImport(){
@@ -3153,6 +3193,26 @@ async function _extractFromPDF(file){
   return {text:fullText.trim(), photo:photoDataUrl};
 }
 
+// Extract tabular text from XLSX/XLS using SheetJS. Returns a plain-text CSV-per-sheet
+// representation that AI can parse directly into contacts.
+async function _extractFromXLSX(file){
+  if(!window.XLSX) throw new Error('SheetJS (XLSX) не загружен');
+  const ab=await _readAB(file);
+  const wb=XLSX.read(ab,{type:'array',cellDates:true});
+  const parts=[];
+  const MAX_ROWS=2000; // cap per sheet to keep AI payload manageable
+  wb.SheetNames.forEach(function(sn){
+    const ws=wb.Sheets[sn];
+    if(!ws) return;
+    const csv=XLSX.utils.sheet_to_csv(ws,{blankrows:false,strip:true});
+    if(!csv || !csv.trim()) return;
+    const rows=csv.split(/\r?\n/);
+    const clipped=rows.length>MAX_ROWS ? rows.slice(0,MAX_ROWS).join('\n')+'\n…(ещё '+(rows.length-MAX_ROWS)+' строк пропущено)' : csv;
+    parts.push('=== Лист: '+sn+' ===\n'+clipped);
+  });
+  return {text:parts.join('\n\n').trim(), photo:null};
+}
+
 // Extract text + first image from DOCX using mammoth.js
 async function _extractFromDOCX(file){
   if(!window.mammoth) throw new Error('mammoth.js не загружен');
@@ -3184,10 +3244,16 @@ async function _detectKind(file){
     const b=new Uint8Array(headBuf);
     // %PDF
     if(b[0]===0x25 && b[1]===0x50 && b[2]===0x44 && b[3]===0x46) return 'pdf';
-    // PK\x03\x04 = ZIP (docx/xlsx/pptx container)
-    if(b[0]===0x50 && b[1]===0x4b && b[2]===0x03 && b[3]===0x04) return 'docx';
-    // D0 CF 11 E0 = OLE2 (legacy .doc/.xls)
-    if(b[0]===0xd0 && b[1]===0xcf && b[2]===0x11 && b[3]===0xe0) return 'doc';
+    // PK\x03\x04 = ZIP (docx/xlsx/pptx container) — disambiguate by extension
+    if(b[0]===0x50 && b[1]===0x4b && b[2]===0x03 && b[3]===0x04){
+      if(name.endsWith('.xlsx')||name.endsWith('.xlsm')||name.endsWith('.xlsb')) return 'xlsx';
+      return 'docx';
+    }
+    // D0 CF 11 E0 = OLE2 (legacy .doc/.xls) — disambiguate by extension
+    if(b[0]===0xd0 && b[1]===0xcf && b[2]===0x11 && b[3]===0xe0){
+      if(name.endsWith('.xls')) return 'xlsx'; // SheetJS handles legacy xls too
+      return 'doc';
+    }
     // JPEG/PNG/GIF
     if(b[0]===0xff && b[1]===0xd8) return 'image';
     if(b[0]===0x89 && b[1]===0x50 && b[2]===0x4e && b[3]===0x47) return 'image';
@@ -3195,6 +3261,7 @@ async function _detectKind(file){
   }catch(e){}
   if(type.startsWith('image/')) return 'image';
   if(name.endsWith('.pdf')) return 'pdf';
+  if(name.endsWith('.xlsx')||name.endsWith('.xls')||name.endsWith('.xlsm')||name.endsWith('.xlsb')) return 'xlsx';
   if(name.endsWith('.docx')) return 'docx';
   if(name.endsWith('.doc')) return 'doc';
   if(name.endsWith('.txt')||name.endsWith('.csv')||name.endsWith('.vcf')||type.startsWith('text/')) return 'text';
@@ -3226,6 +3293,11 @@ async function handleAIFileSelect(input) {
         const r=await _extractFromDOCX(file);
         extractedText=r.text; extractedPhoto=r.photo;
       }catch(e){console.warn('docx extract failed',e);}
+    } else if(kind==='xlsx'){
+      try{
+        const r=await _extractFromXLSX(file);
+        extractedText=r.text; extractedPhoto=r.photo;
+      }catch(e){console.warn('xlsx extract failed',e);}
     } else if(kind==='text'){
       try{extractedText=await _readTx(file);}catch(e){}
     }
