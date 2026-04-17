@@ -1457,7 +1457,15 @@ function openCandidateForm(id){pendingCandPhoto=null;
 </div>
 <div class="form-group"><label class="form-label">Должность (желаемая)</label><input class="form-input" id="cf-pos" value="${esc(c?c.position:'')}" placeholder="Frontend Developer"></div>
 <div class="form-group"><label class="form-label">Компания</label><input class="form-input" id="cf-co" value="${esc(c?c.company||'':'')}" placeholder="Яндекс"></div>
-<div class="form-group"><label class="form-label">Гражданство</label><input class="form-input" id="cf-cit" value="${esc(c?c.citizenship||'':'')}" placeholder="РФ"></div>
+<div class="form-group">
+  <label class="form-label">Гражданство</label>
+  <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap">
+    <div class="chip" id="cf-cit-rf" onclick="setCitChoice('РФ')">🇷🇺 РФ</div>
+    <div class="chip" id="cf-cit-other" onclick="setCitChoice('other')">🌍 Другое</div>
+  </div>
+  <input class="form-input" id="cf-cit" value="${esc(c?c.citizenship||'':'')}" placeholder="Укажите страну (напр. Беларусь, Казахстан)" style="display:none">
+  <div style="font-size:11px;color:#97a5b8;margin-top:4px">Нажмите на активную кнопку ещё раз, чтобы снять выбор</div>
+</div>
 <details style="margin:0 0 10px;padding:8px 10px;background:#f7faff;border-radius:10px;border:1px solid #e0e8f2"${c&&(c.currentCompany||c.currentRole||c.currentTenure)?' open':''}>
   <summary style="font-size:12px;font-weight:700;color:#1e7de8;cursor:pointer;user-select:none">💼 Текущий опыт работы</summary>
   <div style="margin-top:8px">
@@ -1483,8 +1491,40 @@ function openCandidateForm(id){pendingCandPhoto=null;
 <button class="btn-primary" onclick="saveCandForm('${id||''}')">💾 Сохранить</button>
 <button class="btn-secondary" onclick="closeSheet()">Отмена</button>
 `);
+  // Initialize citizenship toggle state from the existing value (or default РФ for new candidates)
+  (function(){
+    const cur=c?(c.citizenship||''):'';
+    if(cur==='РФ') setCitChoice('РФ', true);
+    else if(cur) setCitChoice('other', true);
+    else if(!c) setCitChoice('РФ', true); // new candidate → default to РФ
+    // else: editing candidate with blank citizenship → leave unselected
+  })();
 }
 function setStars(n){_stars=n;document.querySelectorAll('#si .star-btn').forEach((s,i)=>s.classList.toggle('active',i<n))}
+function setCitChoice(choice, force){
+  const rf=document.getElementById('cf-cit-rf');
+  const oth=document.getElementById('cf-cit-other');
+  const inp=document.getElementById('cf-cit');
+  if(!rf||!oth||!inp) return;
+  const wasRf=rf.classList.contains('active');
+  const wasOther=oth.classList.contains('active');
+  rf.classList.remove('active');
+  oth.classList.remove('active');
+  if(choice==='РФ' && (force || !wasRf)){
+    rf.classList.add('active');
+    inp.value='РФ';
+    inp.style.display='none';
+  } else if(choice==='other' && (force || !wasOther)){
+    oth.classList.add('active');
+    if(inp.value==='РФ') inp.value='';
+    inp.style.display='';
+    if(!force) setTimeout(()=>{try{inp.focus()}catch(e){}},50);
+  } else {
+    // Toggled off — clear
+    inp.value='';
+    inp.style.display='none';
+  }
+}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
 function saveCandForm(id){
   const name=document.getElementById('cf-name').value.trim();
