@@ -269,6 +269,7 @@ body{padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bot
 })();
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.7.2/mammoth.browser.min.js"></script>
+<script src="https://unpkg.com/dexie@3/dist/dexie.min.js"></script>
 </head>
 <body>
 
@@ -541,24 +542,94 @@ function migrateTask(t){
 }
 function c_(v){ return v==null ? '' : v; }
 
-function loadData(){
+// ── INDEXEDDB STORAGE ──
+// localStorage has a ~5MB per-origin limit on iOS Safari; a single file attachment
+// easily blows it. IndexedDB's quota is hundreds of MB to GB and supports native Blobs.
+// We keep file metadata on the candidate (name/size/type/added/id) and store the
+// actual Blob in a separate `files` store keyed by file id, indexed by candidateId.
+const db = new Dexie('ischuDB');
+db.version(1).stores({candidates:'id', vacancies:'id', tasks:'id'});
+db.version(2).stores({candidates:'id', vacancies:'id', tasks:'id', files:'id,candidateId'});
+
+// Convert a data URL like "data:application/pdf;base64,JVBERi0xLj..." into a Blob
+function _dataUrlToBlobSync(dataUrl){
+  const m = typeof dataUrl==='string' ? dataUrl.match(/^data:([^;]+);base64,(.+)$/) : null;
+  if (!m) return null;
+  const mime = m[1];
+  const bin = atob(m[2]);
+  const bytes = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+async function loadData(){
+  // One-time migration: localStorage → IndexedDB. Strip any inline base64 file payloads
+  // out of candidate records and store them as real Blobs in db.files.
+  if(!localStorage.getItem('ischu_migrated')){
+    try{
+      const lc=(JSON.parse(localStorage.getItem('ischu_candidates')||'[]')||[]).map(migrateCandidate).filter(Boolean);
+      const lv=(JSON.parse(localStorage.getItem('ischu_vacancies')||'[]')||[]).map(migrateVacancy).filter(Boolean);
+      const lt=(JSON.parse(localStorage.getItem('ischu_tasks')||'[]')||[]).map(migrateTask).filter(Boolean);
+      const fileBlobs=[]; // {id, candidateId, blob}
+      const cleanCands=lc.map(cand=>{
+        if(Array.isArray(cand.files)&&cand.files.length){
+          cand.files=cand.files.map(f=>{
+            if(f&&typeof f.data==='string'&&f.data.startsWith('data:')){
+              const blob=_dataUrlToBlobSync(f.data);
+              const fid=f.id||genId();
+              if(blob) fileBlobs.push({id:fid, candidateId:cand.id, blob});
+              // Keep only metadata; drop the bulky base64 payload
+              return {id:fid, name:f.name, size:f.size||(blob?blob.size:0), type:f.type||(blob?blob.type:''), added:f.added||todayStr()};
+            }
+            return f;
+          });
+        }
+        return cand;
+      });
+      if(lc.length||lv.length||lt.length){
+        await db.transaction('rw',db.candidates,db.vacancies,db.tasks,db.files,async()=>{
+          if(cleanCands.length)await db.candidates.bulkPut(cleanCands);
+          if(lv.length)await db.vacancies.bulkPut(lv);
+          if(lt.length)await db.tasks.bulkPut(lt);
+          if(fileBlobs.length)await db.files.bulkPut(fileBlobs);
+        });
+      }
+      localStorage.setItem('ischu_migrated','1');
+    }catch(e){console.warn('Migration failed, will retry on next load:', e);}
+  }
   try{
-    candidates=(JSON.parse(localStorage.getItem('ischu_candidates')||'[]')||[]).map(migrateCandidate).filter(Boolean);
-    vacancies=(JSON.parse(localStorage.getItem('ischu_vacancies')||'[]')||[]).map(migrateVacancy).filter(Boolean);
-    tasks=(JSON.parse(localStorage.getItem('ischu_tasks')||'[]')||[]).map(migrateTask).filter(Boolean);
+    candidates=(await db.candidates.toArray()).map(migrateCandidate).filter(Boolean);
+    vacancies=(await db.vacancies.toArray()).map(migrateVacancy).filter(Boolean);
+    tasks=(await db.tasks.toArray()).map(migrateTask).filter(Boolean);
   }catch(e){console.warn('loadData error', e); candidates=[];vacancies=[];tasks=[];}
-  if(!candidates.length && !vacancies.length && !tasks.length) seedData();
+  if(!candidates.length && !vacancies.length && !tasks.length) { seedData(); await saveData(); }
   setTimeout(()=>{ try{ updateNotifBadge(); }catch(e){} }, 50);
 }
-function saveData(){
+
+async function saveData(){
   try{
-    localStorage.setItem('ischu_candidates',JSON.stringify(candidates));
-    localStorage.setItem('ischu_vacancies',JSON.stringify(vacancies));
-    localStorage.setItem('ischu_tasks',JSON.stringify(tasks));
+    // Strip any residual base64 payload defensively — Blobs live only in db.files
+    const cleanCands=candidates.map(c=>{
+      if(Array.isArray(c.files)&&c.files.some(f=>f&&f.data)){
+        const copy={...c};
+        copy.files=c.files.map(f=>{ const {data, ...rest}=f||{}; return rest; });
+        return copy;
+      }
+      return c;
+    });
+    await db.transaction('rw',db.candidates,db.vacancies,db.tasks,async()=>{
+      await db.candidates.clear();
+      if(cleanCands.length)await db.candidates.bulkAdd(cleanCands);
+      await db.vacancies.clear();
+      if(vacancies.length)await db.vacancies.bulkAdd(vacancies);
+      await db.tasks.clear();
+      if(tasks.length)await db.tasks.bulkAdd(tasks);
+    });
   }catch(e){
-    // Likely quota exceeded from large file attachments
     console.error('saveData failed', e);
-    if(typeof showToast==='function') showToast('⚠️ Недостаточно места для сохранения. Удалите крупные файлы из контактов.', 'error', 6000);
+    if(e&&(e.name==='QuotaExceededError'||e.name==='NS_ERROR_DOM_QUOTA_REACHED')){
+      if(typeof showToast==='function') showToast('⚠️ Место в браузере закончилось. Удалите часть файлов или кандидатов.', 'error', 6000);
+    }
   }
   if(typeof updateNotifBadge==='function') updateNotifBadge();
 }
@@ -1245,7 +1316,10 @@ function addLog(c,text,type='note'){
 }
 function deleteCandidate(id){
   if(!confirm('Удалить кандидата?'))return;
-  candidates=candidates.filter(c=>c.id!==id);saveData();closeSheet();renderScreen(currentTab);
+  candidates=candidates.filter(c=>c.id!==id);
+  // Free the Blob storage attached to this candidate
+  db.files.where('candidateId').equals(id).delete().catch(()=>{});
+  saveData();closeSheet();renderScreen(currentTab);
 }
 
 // ADD/EDIT CANDIDATE
@@ -2556,18 +2630,23 @@ function openFileInput(candId){
   inp.onchange=function(){handleCandFiles(candId,this.files)};
   inp.click();
 }
-function handleCandFiles(candId,fileList){
+async function handleCandFiles(candId,fileList){
   const c=candidates.find(x=>x.id===candId);if(!c)return;
   if(!c.files)c.files=[];
-  Array.from(fileList).forEach(f=>{
-    const reader=new FileReader();
-    reader.onload=e=>{
-      c.files.push({id:genId(),name:f.name,size:f.size,type:f.type,data:e.target.result,added:todayStr()});
+  // Store each File directly as a Blob in IndexedDB — no base64 conversion, no size inflation.
+  // Candidate record keeps only tiny metadata so saveData() writes stay small no matter how big the files.
+  for (const f of Array.from(fileList)) {
+    const fid=genId();
+    try{
+      await db.files.put({id:fid, candidateId:candId, blob:f});
+      c.files.push({id:fid, name:f.name, size:f.size, type:f.type||'application/octet-stream', added:todayStr()});
       addLog(c,'Файл прикреплён: '+f.name,'file');
-      saveData();openCandidateDetail(candId);
-    };
-    reader.readAsDataURL(f);
-  });
+    }catch(e){
+      console.error('file attach failed', f.name, e);
+      if(typeof showToast==='function') showToast('Не удалось сохранить файл: '+f.name, 'error', 5000);
+    }
+  }
+  saveData();openCandidateDetail(candId);
 }
 function _dataUrlToBlob(dataUrl){
   // data:<mime>;base64,<payload>
@@ -2588,10 +2667,14 @@ async function downloadCandFile(candId,fileId){
   const c=candidates.find(x=>x.id===candId);if(!c){alert('Кандидат не найден');return;}
   const f=(c.files||[]).find(x=>x.id===fileId);if(!f){alert('Файл не найден');return;}
   try{
-    const blob = _dataUrlToBlob(f.data);
+    // Blob lives in IndexedDB; metadata lives on the candidate. Legacy fallback: if
+    // some old record still has f.data (migration missed), reconstruct from base64.
+    let blob = null;
+    try { const rec = await db.files.get(fileId); if (rec && rec.blob) blob = rec.blob; } catch(e){}
+    if (!blob && f.data) blob = _dataUrlToBlob(f.data);
     if (!blob) { alert('Невозможно прочитать файл'); return; }
     const fileName = f.name || 'file';
-    const mime = blob.type || 'application/octet-stream';
+    const mime = blob.type || f.type || 'application/octet-stream';
 
     // Try Web Share API first (best on iOS: user picks Save to Files / Mail / Messages)
     try {
@@ -2651,11 +2734,12 @@ function _iosShowFileOverlay(fileName, mime, dataUrl){
   ov.innerHTML = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><div style="color:white;flex:1;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+fileName+'</div><button onclick="document.getElementById(\'ios-file-overlay\').remove()" style="background:rgba(255,255,255,0.15);border:none;color:white;width:36px;height:36px;border-radius:50%;font-size:18px;cursor:pointer">✕</button></div><div style="flex:1;display:flex;align-items:center;justify-content:center;overflow:auto">'+body+'</div>';
   document.body.appendChild(ov);
 }
-function deleteCandFile(candId,fileId){
+async function deleteCandFile(candId,fileId){
   if(!confirm('Удалить файл?'))return;
   const c=candidates.find(x=>x.id===candId);if(!c)return;
   c.files=c.files.filter(f=>f.id!==fileId);
   addLog(c,'Файл удалён','file');
+  try { await db.files.delete(fileId); } catch(e){}
   saveData();openCandidateDetail(candId);
 }
 function fmtFileSize(b){if(b<1024)return b+'Б';if(b<1048576)return (b/1024).toFixed(1)+'КБ';return (b/1048576).toFixed(1)+'МБ';}
@@ -2712,8 +2796,7 @@ function confirmImport(){
 
 // ── INIT ──
 document.querySelectorAll('.tab').forEach((t,i)=>t.addEventListener('click',()=>switchTab(i)));
-loadData();
-switchTab(0);
+(async()=>{ await loadData(); switchTab(0); })();
 
 
 // ═══════════════════════════════════════════════
