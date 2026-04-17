@@ -2747,91 +2747,249 @@ async function deleteCandFile(candId,fileId){
 function fmtFileSize(b){if(b<1024)return b+'Б';if(b<1048576)return (b/1024).toFixed(1)+'КБ';return (b/1048576).toFixed(1)+'МБ';}
 function fileIcon(name){const ext=(name||'').split('.').pop().toLowerCase();const m={'pdf':'📕','doc':'📘','docx':'📘','xls':'📗','xlsx':'📗','jpg':'🖼','jpeg':'🖼','png':'🖼','gif':'🖼','txt':'📄','zip':'📦','rar':'📦'};return m[ext]||'📎';}
 
-// CSV preview (for import CSV tab)
+// ── Tabular import helpers (shared between CSV/Excel tab and AI-file tab) ──
+
+// Canonical field → list of header keyword patterns (lowercase, no-diacritic).
+// Matched by substring. Order matters: first match wins.
+// Order matters: more specific keys must come BEFORE generic ones (e.g. "currentPos"
+// with "текущая позиция" before "position" with bare "позиция"). Same-key matches
+// skip columns already claimed by earlier fields.
+const TABULAR_FIELD_PATTERNS = [
+  ['name',        ['фио','ф.и.о','полное имя','имя кандидата','кандидат','name','full name','contact name','contact']],
+  ['phone',       ['телефон','номер телефона','моб','тел.','tel','phone','mobile','cell']],
+  ['email',       ['email','e-mail','почта','mail','эл. почта','электронная почта']],
+  ['currentPos',  ['текущая позиция','текущая должность','текущее место','опыт','current position','current role','experience']],
+  ['position',    ['желаемая позиция','желаемая должность','целевая позиция','позиция','должность','роль','position','role','job title','title']],
+  ['company',     ['название компании','компания','организация','работодатель','company','organization','employer']],
+  ['vacancy',     ['вакансия','vacancy']],
+  ['status',      ['статус','этап','stage','status','state']],
+  ['source',      ['источник','откуда','source','channel']],
+  ['salary',      ['зп','зарплата','оклад','salary','compensation','желаемая','ожидания']],
+  ['citizenship', ['гражданство','citizenship','nationality']],
+  ['comments',    ['комментар','заметк','примечан','comment','note','remark']],
+  ['date',        ['дата внесения','дата добавления','дата','created','added','date']],
+  ['telegram',    ['telegram','телеграм','tg']],
+  ['linkedin',    ['linkedin','линкед']]
+];
+
+// Russian/English status labels → canonical id. Lowercase substring matching.
+const TABULAR_STATUS_MAP = [
+  ['самоотказ',       'selfreject'],
+  ['отказ кандидата', 'selfreject'],
+  ['отказался',       'selfreject'],
+  ['не формат',       'rejected'],
+  ['не подход',       'rejected'],
+  ['отклон',          'rejected'],
+  ['отказ',           'rejected'],
+  ['reject',          'rejected'],
+  ['нанят',           'hired'],
+  ['принят',          'hired'],
+  ['вышел',           'hired'],
+  ['hired',           'hired'],
+  ['оффер',           'offer'],
+  ['offer',           'offer'],
+  ['предложен',       'offer'],
+  ['интервью',        'interview'],
+  ['собесед',         'interview'],
+  ['встреч',          'interview'],
+  ['interview',       'interview'],
+  ['meet',            'interview'],
+  ['резерв',          'reserve'],
+  ['отлож',           'reserve'],
+  ['reserve',         'reserve'],
+  ['скрининг',        'screening'],
+  ['первичн',         'screening'],
+  ['звонок',          'screening'],
+  ['call',            'screening'],
+  ['screening',       'screening'],
+  ['новый',           'new'],
+  ['нов',             'new'],
+  ['new',             'new']
+];
+
+// Read any tabular file (xlsx, xls, csv, tsv) as {headers, aoa} using SheetJS
+// so quoted multi-line cells and all Excel cell types are handled correctly.
+async function _parseTabularFile(file){
+  if(!window.XLSX) throw new Error('SheetJS не загружен');
+  const name=(file.name||'').toLowerCase();
+  const isExcel = name.endsWith('.xlsx')||name.endsWith('.xls')||name.endsWith('.xlsm')||name.endsWith('.xlsb');
+  let wb;
+  if(isExcel){
+    const ab=await _readAB(file);
+    wb=XLSX.read(ab,{type:'array',cellDates:false,cellText:false,raw:false});
+  } else {
+    const text=await _readTx(file);
+    wb=XLSX.read(text,{type:'string',cellDates:false,cellText:false,raw:false});
+  }
+  let picked=null;
+  for(const sn of wb.SheetNames){
+    const ws=wb.Sheets[sn]; if(!ws) continue;
+    const aoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:false,blankrows:false});
+    if(aoa && aoa.length>=2){ picked={name:sn,aoa}; break; }
+  }
+  if(!picked) return {sheet:null, headers:[], aoa:[]};
+  const headers=(picked.aoa[0]||[]).map(h=>(h==null?'':String(h)).trim());
+  const body=picked.aoa.slice(1).filter(r=>r.some(c=>c!=null&&String(c).trim()!==''));
+  return {sheet:picked.name, headers, aoa:body};
+}
+
+// Map raw header strings to canonical field indices based on pattern dictionary.
+function _detectHeaderMapping(headers){
+  const norm=s=>String(s||'').toLowerCase().replace(/ё/g,'е').replace(/\s+/g,' ').trim();
+  const nhs=headers.map(norm);
+  const map={}; // canonical → column index
+  TABULAR_FIELD_PATTERNS.forEach(([field,patterns])=>{
+    if(map[field]!==undefined) return;
+    for(let i=0;i<nhs.length;i++){
+      if(Object.values(map).includes(i)) continue;
+      if(patterns.some(p=>nhs[i].includes(p))){ map[field]=i; return; }
+    }
+  });
+  return map;
+}
+
+// Normalize a status cell value to a canonical id (or '' if unknown).
+function _normalizeStatusValue(v){
+  const s=String(v||'').toLowerCase().replace(/ё/g,'е').trim();
+  if(!s) return '';
+  for(const [needle,id] of TABULAR_STATUS_MAP){ if(s.includes(needle)) return id; }
+  return '';
+}
+
+// Split a multi-value cell (phones, emails) on newlines, semicolons, commas, " / "
+function _splitMulti(v){
+  if(v==null) return [];
+  return String(v).split(/[\r\n;]+|\s{2,}|\s\/\s/).map(x=>x.trim()).filter(Boolean);
+}
+
+// Parse "ЗП 150 000 — 200 000" or "170000" style salary expectations.
+function _parseSalary(v){
+  const s=String(v||'').replace(/\s|\u00a0/g,'').replace(/,/g,'.').toLowerCase();
+  if(!s) return {min:0,max:0};
+  const nums=(s.match(/\d+(?:\.\d+)?/g)||[]).map(n=>Math.round(parseFloat(n))).filter(n=>n>1000);
+  if(nums.length===0) return {min:0,max:0};
+  if(nums.length===1) return {min:nums[0],max:nums[0]};
+  return {min:Math.min.apply(null,nums),max:Math.max.apply(null,nums)};
+}
+
+// Build a candidate object from one tabular row using the detected mapping.
+// Returns null if the row has no usable name.
+function _rowToCandidate(row, map, headers){
+  const get=k=>map[k]!==undefined ? String(row[map[k]]||'').trim() : '';
+  const name=get('name'); if(!name) return null;
+  const phonesRaw=_splitMulti(get('phone'));
+  const emailsRaw=_splitMulti(get('email'));
+  const tgRaw=_splitMulti(get('telegram'));
+  const liRaw=_splitMulti(get('linkedin'));
+  const statusId=_normalizeStatusValue(get('status'))||'new';
+  const sal=_parseSalary(get('salary'));
+  // Build a notes block from non-core fields so no information is lost.
+  const noteParts=[];
+  const currentPos=get('currentPos'); if(currentPos) noteParts.push('Текущая позиция:\n'+currentPos);
+  const vacancy=get('vacancy'); if(vacancy) noteParts.push('Вакансия: '+vacancy);
+  const citizenship=get('citizenship'); if(citizenship) noteParts.push('Гражданство: '+citizenship);
+  const comments=get('comments'); if(comments) noteParts.push('Комментарии:\n'+comments);
+  // Any unmapped columns with content — include as "Header: value"
+  for(let i=0;i<headers.length;i++){
+    if(Object.values(map).includes(i)) continue;
+    const h=(headers[i]||'').trim(); if(!h) continue;
+    const v=String(row[i]||'').trim();
+    if(v) noteParts.push(h+': '+v);
+  }
+  return {
+    id: genId(), name, position: get('position')||'', company: get('company')||'',
+    status: statusId, source: 'other', vacancy: '', rating: 3,
+    salaryMin: sal.min, salaryMax: sal.max,
+    interviewDate: '', nextAction: '',
+    phones: phonesRaw.map(p=>({type:'mobile',value:p})),
+    emails: emailsRaw.map(e=>({type:'work',value:e})),
+    socials: [
+      ...tgRaw.map(t=>({type:'Telegram',value:t})),
+      ...liRaw.map(t=>({type:'LinkedIn',value:t}))
+    ],
+    notes: noteParts.join('\n\n'),
+    photo: null, files: [], created: todayStr(),
+    activityLog: [{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Импорт из таблицы (CSV/Excel)',type:'note'}]
+  };
+}
+
+// Shared preview renderer used by both import tabs. Shows mapping summary +
+// first 8 rows of normalized data. Sets importRows[] to an array of full
+// candidate-shape objects ready for smartAddCandidate.
+function _renderTabularPreview(headers, aoa, map, prevEl){
+  const mapped=aoa.map(r=>_rowToCandidate(r,map,headers)).filter(Boolean);
+  importRows=mapped;
+  if(!prevEl) return mapped.length;
+  const mapEntries=Object.entries(map).filter(([,i])=>i!==undefined);
+  const mapSummary=mapEntries.map(([f,i])=>{
+    const labels={name:'Имя',phone:'Телефон',email:'Email',position:'Позиция',company:'Компания',status:'Статус',source:'Источник',salary:'ЗП',currentPos:'Тек. позиция',vacancy:'Вакансия',citizenship:'Гражданство',comments:'Комментарии',date:'Дата',telegram:'Telegram',linkedin:'LinkedIn'};
+    return `<span style="display:inline-block;padding:2px 8px;background:#e8f4ff;border-radius:8px;font-size:10px;margin:2px">${labels[f]||f} ← «${headers[i]||''}»</span>`;
+  }).join(' ');
+  const preview=mapped.slice(0,8).map(c=>`<tr><td>${c.name||'—'}</td><td>${c.position||''}</td><td>${c.company||''}</td><td>${(c.phones[0]||{}).value||''}</td><td>${(c.emails[0]||{}).value||''}</td><td><span class="status-pill status-${c.status}">${STATUSES[c.status]||c.status}</span></td></tr>`).join('');
+  const moreText=mapped.length>8?`<tr><td colspan="6" style="text-align:center;color:#6b87b0;font-size:11px">…ещё ${mapped.length-8} контактов</td></tr>`:'';
+  const warn=!map.name?'<div style="padding:10px;background:#ffeee8;border-radius:8px;font-size:12px;color:#c62828;margin-bottom:8px">⚠ Не найдена колонка с именем (ФИО). Проверьте первую строку файла — она должна быть заголовками.</div>':'';
+  prevEl.innerHTML=`${warn}<div style="font-size:13px;font-weight:700;margin-bottom:6px">Распознано контактов: ${mapped.length}</div><div style="margin-bottom:8px">${mapSummary||'<span style="font-size:11px;color:#c62828">⚠ Колонки не распознаны</span>'}</div><div class="import-preview"><table style="width:100%;font-size:12px"><tr><th>Имя</th><th>Позиция</th><th>Компания</th><th>Телефон</th><th>Email</th><th>Статус</th></tr>${preview}${moreText}</table></div>`;
+  return mapped.length;
+}
+
+// CSV / Excel preview
 async function previewImport(inp){
   const f=inp.files[0];if(!f)return;
   const name=(f.name||'').toLowerCase();
-  // Check if vCard
   if(name.endsWith('.vcf')){parseVCard(inp);return;}
   const prev=document.getElementById('imp-prev');
   const btn=document.getElementById('imp-ok');
-
-  // Helper: given a CSV/TSV text blob, populate importRows + preview table
-  function renderCsvText(text){
-    const trimmed=(text||'').trim();
-    const lines=trimmed.split(/\r?\n/);
-    if(lines.length<2){
-      if(prev) prev.innerHTML='<div style="padding:10px;background:#fff4e6;border-radius:8px;font-size:12px;color:#7a5000">⚠ Нужна хотя бы одна строка заголовков и одна строка данных.</div>';
+  if(prev) prev.innerHTML='<div style="padding:10px;background:#f5f5f5;border-radius:8px;font-size:12px;text-align:center">⏳ Чтение файла…</div>';
+  try{
+    const {headers,aoa}=await _parseTabularFile(f);
+    if(!headers.length||!aoa.length){
+      if(prev) prev.innerHTML='<div style="padding:10px;background:#fff4e6;border-radius:8px;font-size:12px;color:#7a5000">⚠ В файле не найдено данных. Нужна строка заголовков и хотя бы одна строка данных.</div>';
       return;
     }
-    const firstLine=lines[0];
-    let delim=',';
-    if(firstLine.split('\t').length>firstLine.split(',').length)delim='\t';
-    else if(firstLine.split(';').length>firstLine.split(',').length)delim=';';
-    const hdrs=firstLine.split(delim).map(h=>h.trim().replace(/^"|"$/g,''));
-    importRows=lines.slice(1).filter(l=>l.trim()).map(l=>{
-      const v=l.split(delim).map(x=>x.trim().replace(/^"|"$/g,''));
-      const o={};hdrs.forEach((h,i)=>o[h]=v[i]||'');return o;
-    });
-    if(!prev)return;
-    prev.innerHTML=`<div style="font-size:13px;font-weight:600;margin-bottom:8px">Найдено: ${importRows.length}</div><div class="import-preview"><table><tr>${hdrs.map(h=>`<th>${h}</th>`).join('')}</tr>${importRows.slice(0,5).map(row=>`<tr>${hdrs.map(h=>`<td>${row[h]||''}</td>`).join('')}</tr>`).join('')}${importRows.length>5?`<tr><td colspan="${hdrs.length}" style="text-align:center;color:#6b87b0">...ещё ${importRows.length-5}</td></tr>`:''}</table></div>`;
-    if(btn)btn.style.display='block';
+    const map=_detectHeaderMapping(headers);
+    const count=_renderTabularPreview(headers,aoa,map,prev);
+    if(btn) btn.style.display=(count>0&&map.name!==undefined)?'block':'none';
+  }catch(err){
+    if(prev) prev.innerHTML='<div style="padding:10px;background:#ffeee8;border-radius:8px;font-size:12px;color:#c62828">⚠ Ошибка чтения файла: '+(err.message||err)+'</div>';
   }
-
-  // Excel branch: use SheetJS to read the first non-empty sheet as CSV.
-  const isExcel = name.endsWith('.xlsx')||name.endsWith('.xls')||name.endsWith('.xlsm')||name.endsWith('.xlsb');
-  if(isExcel){
-    if(!window.XLSX){
-      if(prev) prev.innerHTML='<div style="padding:10px;background:#ffeee8;border-radius:8px;font-size:12px;color:#c62828">⚠ Библиотека Excel не загрузилась. Проверьте интернет и обновите страницу, либо используйте вкладку «Файл (AI)».</div>';
-      return;
-    }
-    try{
-      if(prev) prev.innerHTML='<div style="padding:10px;background:#f5f5f5;border-radius:8px;font-size:12px;text-align:center">⏳ Чтение Excel-файла...</div>';
-      const ab=await _readAB(f);
-      const wb=XLSX.read(ab,{type:'array'});
-      // Pick first sheet that has data
-      let csvText='';
-      for(const sn of wb.SheetNames){
-        const ws=wb.Sheets[sn]; if(!ws) continue;
-        const c=XLSX.utils.sheet_to_csv(ws,{blankrows:false,strip:true});
-        if(c && c.trim()){ csvText=c; break; }
-      }
-      if(!csvText){
-        if(prev) prev.innerHTML='<div style="padding:10px;background:#fff4e6;border-radius:8px;font-size:12px;color:#7a5000">⚠ В файле не найдено данных. Если таблица сложная (с фото, несколькими листами) — используйте вкладку «Файл (AI)».</div>';
-        return;
-      }
-      renderCsvText(csvText);
-    }catch(err){
-      if(prev) prev.innerHTML='<div style="padding:10px;background:#ffeee8;border-radius:8px;font-size:12px;color:#c62828">⚠ Ошибка чтения Excel: '+(err.message||err)+'. Попробуйте вкладку «Файл (AI)».</div>';
-    }
-    return;
-  }
-
-  // Plain text CSV/TSV branch
-  const r=new FileReader();
-  r.onload=e=>{ renderCsvText(e.target.result||''); };
-  r.readAsText(f,'UTF-8');
 }
-function confirmImport(){
-  // CSV/TSV bulk import — ask once what to do with duplicates, then apply to all
-  askDedupeStrategy('CSV-импорт').then(function(strategy){
-    if(strategy===null){ closeSheet(); return; }
-    let added=0, merged=0, skipped=0;
-    const tasks=[];
-    importRows.forEach(row=>{
-      if(!row.name)return;
-      const nc={id:genId(),name:row.name,position:row.position||'',company:row.company||'',status:row.status||'new',source:row.source||'other',vacancy:'',rating:3,salaryMin:0,salaryMax:0,interviewDate:'',nextAction:'',phones:row.phone?[{type:'mobile',value:row.phone}]:[],emails:row.email?[{type:'work',value:row.email}]:[],socials:[],notes:'',photo:null,files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Импортирован из CSV',type:'note'}]};
-      tasks.push(smartAddCandidate(nc,{autoStrategy:strategy}).then(r=>{
-        if(r.action==='added') added++;
-        else if(r.action==='merged') merged++;
-        else skipped++;
-      }));
-    });
-    Promise.all(tasks).then(()=>{
-      saveData();closeSheet();renderScreen(currentTab);
-      showToast('Импорт CSV: +'+added+' новых, '+merged+' обновлено, '+skipped+' пропущено','success',5000);
-    });
-  });
+
+// Batched import — progress UI, yields to UI thread so 5000+ rows don't freeze.
+async function confirmImport(){
+  const strategy=await askDedupeStrategy('Импорт таблицы (CSV/Excel)');
+  if(strategy===null){ closeSheet(); return; }
+  const btn=document.getElementById('imp-ok');
+  const prev=document.getElementById('imp-prev');
+  const total=importRows.length;
+  let added=0,merged=0,skipped=0;
+  const progress=(i)=>{
+    if(btn){ btn.disabled=true; btn.textContent='⏳ Импорт… '+i+'/'+total; }
+    if(prev){
+      const bar=document.getElementById('imp-progress');
+      if(bar) bar.style.width=Math.round(100*i/total)+'%';
+    }
+  };
+  if(prev){
+    prev.innerHTML='<div style="padding:12px;background:#f0f7ff;border-radius:10px"><div style="font-size:12px;color:#1e7de8;font-weight:700;margin-bottom:6px">Импорт '+total+' контактов…</div><div style="height:8px;background:#e0e8f2;border-radius:4px;overflow:hidden"><div id="imp-progress" style="height:100%;width:0%;background:linear-gradient(90deg,#1e7de8,#6c3cf0);transition:width .2s"></div></div></div>';
+  }
+  // Batch: yield every 100 rows so UI can paint.
+  const BATCH=100;
+  for(let i=0;i<total;i++){
+    const nc=importRows[i];
+    try{
+      const res=await smartAddCandidate(nc,{autoStrategy:strategy});
+      if(res.action==='added') added++;
+      else if(res.action==='merged') merged++;
+      else skipped++;
+    }catch(e){ skipped++; }
+    if(i%BATCH===0||i===total-1) progress(i+1);
+    if(i%BATCH===0) await new Promise(r=>setTimeout(r,0));
+  }
+  await saveData();
+  closeSheet();
+  renderScreen(currentTab);
+  showToast('Импорт: +'+added+' новых, '+merged+' обновлено'+(skipped?', '+skipped+' пропущено':''),'success',5000);
+  if(btn){ btn.disabled=false; btn.textContent='✅ Импортировать'; }
 }
 
 // ── INIT ──
@@ -3301,11 +3459,30 @@ async function handleAIFileSelect(input) {
     } else if(kind==='text'){
       try{extractedText=await _readTx(file);}catch(e){}
     }
+    // For tabular files (xlsx/xls/csv) attempt structural parse — if it finds a
+    // name column, we skip AI entirely (faster, free, works with 10k+ rows).
+    let structuralCandidates=null, structuralMap=null, structuralHeaders=null;
+    const lowerName=(file.name||'').toLowerCase();
+    const looksTabular = kind==='xlsx' || lowerName.endsWith('.csv') || lowerName.endsWith('.tsv');
+    if(looksTabular){
+      try{
+        const t=await _parseTabularFile(file);
+        if(t.headers.length && t.aoa.length){
+          const map=_detectHeaderMapping(t.headers);
+          if(map.name!==undefined){
+            structuralCandidates=t.aoa.map(r=>_rowToCandidate(r,map,t.headers)).filter(Boolean);
+            structuralMap=map; structuralHeaders=t.headers;
+          }
+        }
+      }catch(e){console.warn('structural parse failed',e);}
+    }
     pendingAIFile={
       name:file.name, type:file.type, size:file.size,
-      kind:kind, text:extractedText, photo:extractedPhoto, data:fileDataUrl
+      kind:kind, text:extractedText, photo:extractedPhoto, data:fileDataUrl,
+      structuralCandidates, structuralMap, structuralHeaders
     };
-    nameDiv.textContent='📄 '+file.name+' ('+(file.size/1024).toFixed(1)+' KB)'+(extractedPhoto?' · фото найдено':'')+(extractedText?' · текст извлечён':'');
+    const tabMsg = structuralCandidates ? ' · таблица распознана: '+structuralCandidates.length+' контактов' : '';
+    nameDiv.textContent='📄 '+file.name+' ('+(file.size/1024).toFixed(1)+' KB)'+(extractedPhoto?' · фото найдено':'')+tabMsg+(extractedText&&!structuralCandidates?' · текст извлечён':'');
     btn.style.display='block';
   }catch(err){
     nameDiv.textContent='⚠️ Ошибка: '+(err.message||err);
@@ -3314,10 +3491,52 @@ async function handleAIFileSelect(input) {
 }
 
 async function aiFileImport() {
-  if (!isAIConfigured()) { showAISettings(); return; }
   if (!pendingAIFile) { alert('Выберите файл'); return; }
 
   const btn = document.getElementById('ai-file-import-btn');
+
+  // ── Fast path: structured tabular file (xlsx/xls/csv with recognized headers)
+  // Skip AI entirely and use the structural parser. Works offline, free, scales.
+  if (pendingAIFile.structuralCandidates && pendingAIFile.structuralCandidates.length) {
+    const cands = pendingAIFile.structuralCandidates;
+    const strategy = await askDedupeStrategy('Импорт таблицы ('+cands.length+' контактов)');
+    if (strategy === null) return;
+    btn.textContent = '⏳ Импорт… 0/'+cands.length;
+    btn.disabled = true;
+    let added=0, merged=0, skipped=0;
+    const BATCH=100;
+    try {
+      for (let i=0; i<cands.length; i++) {
+        try {
+          const res = await smartAddCandidate(cands[i], {autoStrategy: strategy});
+          if (res.action==='added') added++;
+          else if (res.action==='merged') merged++;
+          else skipped++;
+        } catch(e) { skipped++; }
+        if (i%BATCH===0 || i===cands.length-1) {
+          btn.textContent = '⏳ Импорт… '+(i+1)+'/'+cands.length;
+          await new Promise(r=>setTimeout(r,0)); // yield to UI
+        }
+      }
+      await saveData();
+      closeSheet();
+      renderScreen(currentTab);
+      showToast('Импорт: +'+added+' новых, '+merged+' обновлено'+(skipped?', '+skipped+' пропущено':''),'success',6000);
+    } catch(e) {
+      alert('Ошибка импорта: '+(e.message||e));
+    } finally {
+      pendingAIFile = null;
+      const nameDiv = document.getElementById('ai-file-name');
+      const fileInput = document.getElementById('ai-file-input');
+      if (nameDiv) { nameDiv.style.display='none'; nameDiv.textContent=''; }
+      if (fileInput) { fileInput.value=''; }
+      if (btn) { btn.textContent = '🤖 AI Анализ и Импорт'; btn.disabled = false; btn.style.display='none'; }
+    }
+    return;
+  }
+
+  // ── AI path (images, PDF resumes, short docs without clear tabular structure)
+  if (!isAIConfigured()) { showAISettings(); return; }
   btn.textContent = '⏳ AI анализирует файл...';
   btn.disabled = true;
 
@@ -3328,6 +3547,11 @@ async function aiFileImport() {
       kind: pendingAIFile.kind
     };
     if(pendingAIFile.text){ payload.text = pendingAIFile.text; }
+    // For very large text payloads (large CSV that couldn't be mapped), cap it
+    // so we don't blow the AI context window.
+    if (payload.text && payload.text.length > 60000) {
+      payload.text = payload.text.slice(0, 60000) + '\n…(обрезано; для больших таблиц используйте вкладку CSV/Excel с распознанными заголовками)';
+    }
     if(pendingAIFile.data){ payload.filedata = pendingAIFile.data; }
     const result = await callAI('file_import', payload);
 
