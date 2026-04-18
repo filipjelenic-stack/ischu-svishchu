@@ -519,6 +519,8 @@ function migrateCandidate(c){
   c.currentTenure   = c.currentTenure   || '';
   c.sourcedAt       = c.sourcedAt       || '';
   c.vacancyText     = c.vacancyText     || '';
+  // Direction auto-classified from position/role/company the first time we see the record.
+  if(!c.direction) c.direction = (typeof _classifyDirection==='function') ? _classifyDirection(c) : '';
   return c;
 }
 function migrateVacancy(v){
@@ -694,6 +696,46 @@ function _normalizeSourceValue(v){
   if(!s) return '';
   for(const [rx,id] of SOURCE_ALIASES){ if(rx.test(s)) return id; }
   return '';
+}
+
+// ── DIRECTION (Направление) — auto-classify candidate from free-text fields ──
+// Canonical direction ids + their RU-facing labels. UI shows emojis + Russian label.
+const DIRECTIONS = {
+  finance:     '💰 Финансы',
+  it:          '💻 ИТ / Разработка',
+  sales:       '📈 Продажи',
+  marketing:   '📢 Маркетинг',
+  hr:          '👥 HR / Персонал',
+  ops:         '⚙️ Операции',
+  legal:       '⚖️ Юристы',
+  design:      '🎨 Дизайн',
+  product:     '📦 Продукт',
+  procurement: '🛒 Закупки',
+  customer:    '🎧 Поддержка',
+  management:  '👔 Менеджмент',
+  other:       '📁 Другое'
+};
+// Keyword rules — ORDER MATTERS: specific categories like procurement / hr match
+// BEFORE broad management ("Директор по закупкам" should be procurement, not mgmt).
+const DIRECTION_KEYWORDS = [
+  ['procurement', /закуп|procur|supply\s*chain|buyer|снабжен|поставщ/i],
+  ['finance',    /финанс|financ\w*|бухгал|аудит|audit|\bCFO\b|accountant|controller|treasur|казнач|банкир|инвестиц|invest/i],
+  ['legal',      /юрист|legal|lawyer|counsel|compliance|правов/i],
+  ['hr',         /\bHR\b|\bHRD\b|\bHRBP\b|рекрут|recruit|talent|персонал|кадр|people\s*partner/i],
+  ['design',     /дизайн|designer|UX|UI\b|иллюстрат|illustrat|motion/i],
+  ['product',    /product\s*(manager|owner|lead)|продакт|\bPM\b|\bPO\b|product\s*analyst/i],
+  ['it',         /разработ|engineer|developer|программист|devops|\bQA\b|\bSRE\b|архитек|architect|data\s*scien|\bML\b|машинн|backend|frontend|fullstack|full-stack|android|ios|iOS|\bIT\b|системн.*админ|sysadmin|tech\s*lead|\bCTO\b/i],
+  ['marketing',  /маркет|market|\bSMM\b|\bPR\b|бренд|brand|advert|реклам|digital\s*market/i],
+  ['sales',      /продаж|sales|account\s*(manager|executive)|business\s*develop|\bBD\b|\bBDM\b|клиент.*менедж|key\s*account/i],
+  ['customer',   /customer\s*(success|support|care)|\bCS\b|поддержк|support\s*(agent|specialist|manager)|сапорт/i],
+  ['ops',        /operations?|операцион|\bCOO\b|логист|logistic|supply|inventory|склад/i],
+  ['management', /\bCEO\b|\bCTO\b|\bCOO\b|\bVP\b|director\b|директор|руководител|начальник|head\s*of|chief|владелец|founder|основател/i]
+];
+function _classifyDirection(c){
+  const hay=[c&&c.position,c&&c.currentRole,c&&c.company,c&&c.currentCompany,c&&c.notes,c&&c.vacancyText].filter(Boolean).join(' ');
+  if(!hay.trim()) return '';
+  for(const [id,rx] of DIRECTION_KEYWORDS){ if(rx.test(hay)) return id; }
+  return 'other';
 }
 // Returns existing candidate that duplicates the new one, or null
 function findDuplicate(newCand, excludeId){
@@ -1301,27 +1343,45 @@ function renderDashboard(){
 }
 
 // ── SCREEN 1: CANDIDATES ──
-let candSearch='',candFilters={status:'',source:'',citizenship:''},candView='list',candFilterOpen=false;
+let candSearch='',candFilters={status:'',source:'',citizenship:'',direction:'',position:''},candView='list',candFilterOpen=false;
 
 function renderCandidates(){
   const el=document.getElementById('screen-1');
+  // Remember which input was focused AND its cursor position — so live-typing doesn't
+  // jump focus back to page root after every innerHTML replace.
+  const act=document.activeElement;
+  const focusedId=(act && act.id && el.contains(act)) ? act.id : null;
+  const selStart=(act && typeof act.selectionStart==='number') ? act.selectionStart : null;
+  const selEnd=(act && typeof act.selectionEnd==='number') ? act.selectionEnd : null;
+
   const q=candSearch.toLowerCase();
+  const posQ=(candFilters.position||'').toLowerCase();
   let filtered=candidates.filter(c=>{
     if(q){
-      const hay=[c.name,c.position,c.company,c.currentCompany,c.currentRole,c.citizenship,c.notes].map(s=>(s||'').toLowerCase()).join(' ');
+      const hay=[c.name,c.position,c.company,c.currentCompany,c.currentRole,c.citizenship,c.notes,DIRECTIONS[c.direction]||'',c.direction].map(s=>(s||'').toLowerCase()).join(' ');
       if(!hay.includes(q)) return false;
     }
     if(candFilters.status&&c.status!==candFilters.status)return false;
     if(candFilters.source&&c.source!==candFilters.source)return false;
     if(candFilters.citizenship && (c.citizenship||'').toLowerCase()!==candFilters.citizenship.toLowerCase()) return false;
+    if(candFilters.direction && c.direction!==candFilters.direction) return false;
+    if(posQ){
+      const ph=((c.position||'')+' '+(c.currentRole||'')).toLowerCase();
+      if(!ph.includes(posQ)) return false;
+    }
     return true;
   });
-  // Dynamic citizenship list — only show chips for values that exist
+  // Dynamic citizenship list — only shows values that actually exist so the dropdown
+  // doesn't get bloated with countries the user has never imported.
   const citizens = Array.from(new Set(candidates.map(c=>c.citizenship).filter(Boolean))).sort();
+  // Dynamic direction list — same principle; keeps unused categories out of the picker.
+  const dirsUsed = Array.from(new Set(candidates.map(c=>c.direction).filter(Boolean)));
+  const activeCount = Object.values(candFilters).filter(Boolean).length;
+
   el.innerHTML=`
 <div class="search-row">
-  <input class="search-input" placeholder="🔍 Поиск…" value="${candSearch.replace(/"/g,'&quot;')}" oninput="candSearch=this.value;renderCandidates()">
-  <button class="filter-btn${candFilterOpen?' active':''}" onclick="candFilterOpen=!candFilterOpen;renderCandidates()">⚙ Фильтр</button>
+  <input class="search-input" id="cand-search-input" placeholder="🔍 Поиск…" value="${candSearch.replace(/"/g,'&quot;')}" oninput="candSearch=this.value;renderCandidates()">
+  <button class="filter-btn${candFilterOpen?' active':''}" onclick="candFilterOpen=!candFilterOpen;renderCandidates()">⚙ Фильтр${activeCount?' ('+activeCount+')':''}</button>
 </div>
 ${candFilterOpen?`
 <div class="filter-chips">
@@ -1332,10 +1392,21 @@ ${candFilterOpen?`
   <div class="chip${!candFilters.source?' active':''}" onclick="candFilters.source='';renderCandidates()">Все источники</div>
   ${Object.entries(SOURCES).map(([k,v])=>`<div class="chip${candFilters.source===k?' active':''}" onclick="candFilters.source='${k}';renderCandidates()">${v}</div>`).join('')}
 </div>
-${citizens.length?`<div class="filter-chips">
-  <div class="chip${!candFilters.citizenship?' active':''}" onclick="candFilters.citizenship='';renderCandidates()">🌍 Все гражд.</div>
-  ${citizens.map(ct=>`<div class="chip${candFilters.citizenship===ct?' active':''}" onclick="candFilters.citizenship='${ct.replace(/'/g,'\\\'')}';renderCandidates()">${ct}</div>`).join('')}
-</div>`:''}`:''}
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+  ${citizens.length?`<select class="form-select" id="filter-cit" onchange="candFilters.citizenship=this.value;renderCandidates()" style="font-size:13px;padding:8px 10px">
+    <option value="">🌍 Все гражд.</option>
+    ${citizens.map(ct=>`<option value="${ct.replace(/"/g,'&quot;')}"${candFilters.citizenship===ct?' selected':''}>${ct}</option>`).join('')}
+  </select>`:'<span></span>'}
+  <select class="form-select" id="filter-dir" onchange="candFilters.direction=this.value;renderCandidates()" style="font-size:13px;padding:8px 10px">
+    <option value="">🎯 Все направления</option>
+    ${Object.entries(DIRECTIONS).filter(([k])=>dirsUsed.includes(k)||candFilters.direction===k).map(([k,v])=>`<option value="${k}"${candFilters.direction===k?' selected':''}>${v}</option>`).join('')}
+  </select>
+</div>
+<div style="margin-bottom:10px">
+  <input class="form-input" id="filter-pos" placeholder="💼 Фильтр по должности (напр. CFO, Аналитик)" value="${(candFilters.position||'').replace(/"/g,'&quot;')}" oninput="candFilters.position=this.value;renderCandidates()" style="font-size:13px;padding:8px 10px">
+</div>
+${activeCount?`<div style="margin-bottom:10px;text-align:right"><button onclick="candFilters={status:'',source:'',citizenship:'',direction:'',position:''};renderCandidates()" style="background:none;border:none;color:#e74c3c;font-size:12px;cursor:pointer;font-weight:600;padding:4px 0">✕ Сбросить все фильтры</button></div>`:''}
+`:''}
 <div class="view-toggle">
   <button class="view-btn${candView==='list'?' active':''}" onclick="candView='list';renderCandidates()">☰ Список</button>
   <button class="view-btn${candView==='kanban'?' active':''}" onclick="candView='kanban';renderCandidates()">⊞ Воронка</button>
@@ -1358,6 +1429,18 @@ ${candView==='list'?(filtered.length?filtered.map(c=>{
   </div>`;
 }).join(''):'<div class="empty-state"><div class="es-emoji">👥</div><p>Кандидаты не найдены</p></div>')
 :renderKanban(filtered)}`;
+  // Restore focus + cursor to whichever input was active before the innerHTML replace.
+  // Without this, typing one letter into the search (or position filter) blurs the
+  // field and the user has to tap it again for every keystroke.
+  if(focusedId){
+    const nxt=document.getElementById(focusedId);
+    if(nxt && typeof nxt.focus==='function'){
+      nxt.focus();
+      if(selStart!=null && typeof nxt.setSelectionRange==='function'){
+        try{ nxt.setSelectionRange(selStart, selEnd!=null?selEnd:selStart); }catch(_){}
+      }
+    }
+  }
 }
 
 function renderKanban(list){
@@ -1587,6 +1670,8 @@ function saveCandForm(id){
   const socials=tg?[{type:'Telegram',value:tg}]:[];
   const _val=id2=>{ const el=document.getElementById(id2); return el?el.value.trim():''; };
   const data={name,position:document.getElementById('cf-pos').value.trim(),company:document.getElementById('cf-co').value.trim(),citizenship:_normCitizenship(_val('cf-cit')),currentCompany:_val('cf-ccom'),currentRole:_val('cf-crole'),currentTenure:_val('cf-ctenure'),sourcedAt:_val('cf-srcdate'),status:document.getElementById('cf-st').value,vacancy:document.getElementById('cf-vac').value,source:document.getElementById('cf-src').value,rating:_stars,salaryMin:parseInt(document.getElementById('cf-s1').value)||0,salaryMax:parseInt(document.getElementById('cf-s2').value)||0,interviewDate:document.getElementById('cf-id').value,nextAction:document.getElementById('cf-nd').value,notes:document.getElementById('cf-no').value.trim(),phones,emails,socials,photo:(typeof pendingCandPhoto!=='undefined'&&pendingCandPhoto)?pendingCandPhoto:(id&&candidates.find(x=>x.id===id)?candidates.find(x=>x.id===id).photo:null)};
+  // Auto-classify direction from the new position/role/company so filters work immediately.
+  data.direction = _classifyDirection(data);
   if(id){const c=candidates.find(x=>x.id===id);Object.assign(c,data);addLog(c,'Данные обновлены');pendingCandPhoto=null;saveData();closeSheet();renderScreen(currentTab);return;}
   // New candidate — check for duplicates
   const newCand={id:genId(),...data,files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Кандидат добавлен',type:'note'}]};
@@ -3186,10 +3271,16 @@ function _rowToCandidate(row, map, headers){
     const v=String(row[i]||'').trim();
     if(v) noteParts.push(h+': '+v);
   }
+  const preliminary = {
+    name, position: get('position')||'', company: get('company')||'',
+    currentCompany: cpParsed.company, currentRole: cpParsed.role, currentTenure: cpParsed.tenure,
+    notes: noteParts.join('\n\n'), vacancyText
+  };
+  const direction = _classifyDirection(preliminary);
   return {
     id: genId(), name, position: get('position')||'', company: get('company')||'',
     citizenship, currentCompany: cpParsed.company, currentRole: cpParsed.role, currentTenure: cpParsed.tenure,
-    sourcedAt, vacancyText,
+    sourcedAt, vacancyText, direction,
     status: statusId, source: srcId || 'other', vacancy: '', rating: 3,
     salaryMin: sal.min, salaryMax: sal.max,
     interviewDate: '', nextAction: '',
