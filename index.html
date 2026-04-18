@@ -1345,6 +1345,35 @@ function renderDashboard(){
 // ── SCREEN 1: CANDIDATES ──
 let candSearch='',candFilters={status:'',source:'',citizenship:'',direction:'',position:''},candView='list',candFilterOpen=false;
 
+// Lazy, per-candidate search haystack. We build the lowercased concatenation once
+// and cache it on the object; cleared on save/import so edits stay fresh. Without
+// this, every keystroke re-lowercased 9 fields × N candidates — the main hot path
+// that made search feel laggy on large lists.
+function _candSearchHay(c){
+  if(c && c._searchHay) return c._searchHay;
+  const s=[c.name,c.position,c.company,c.currentCompany,c.currentRole,c.citizenship,c.notes,DIRECTIONS[c.direction]||'',c.direction].map(x=>(x||'').toLowerCase()).join(' ');
+  if(c) c._searchHay=s;
+  return s;
+}
+function _candPosHay(c){
+  if(c && c._posHay!=null) return c._posHay;
+  const s=((c.position||'')+' '+(c.currentRole||'')).toLowerCase();
+  if(c) c._posHay=s;
+  return s;
+}
+// Debounced re-render for the two live-typed inputs (search + position filter).
+// Typing triggers ~1 render per 120ms instead of one per keystroke, which on a
+// multi-thousand-row list is the difference between laggy and instant. The raw
+// input keeps updating at full speed because the DOM field owns its own value —
+// we only defer the expensive filter + innerHTML rebuild.
+let _candRenderTimer=null;
+function _scheduleCandRender(){
+  if(_candRenderTimer) clearTimeout(_candRenderTimer);
+  _candRenderTimer=setTimeout(function(){ _candRenderTimer=null; renderCandidates(); },120);
+}
+function onCandSearchInput(v){ candSearch=v; _scheduleCandRender(); }
+function onCandPosInput(v){ candFilters.position=v; _scheduleCandRender(); }
+
 function renderCandidates(){
   const el=document.getElementById('screen-1');
   // Remember which input was focused AND its cursor position — so live-typing doesn't
@@ -1356,19 +1385,17 @@ function renderCandidates(){
 
   const q=candSearch.toLowerCase();
   const posQ=(candFilters.position||'').toLowerCase();
+  const fStatus=candFilters.status, fSource=candFilters.source;
+  const fCit=(candFilters.citizenship||'').toLowerCase(), fDir=candFilters.direction;
   let filtered=candidates.filter(c=>{
-    if(q){
-      const hay=[c.name,c.position,c.company,c.currentCompany,c.currentRole,c.citizenship,c.notes,DIRECTIONS[c.direction]||'',c.direction].map(s=>(s||'').toLowerCase()).join(' ');
-      if(!hay.includes(q)) return false;
-    }
-    if(candFilters.status&&c.status!==candFilters.status)return false;
-    if(candFilters.source&&c.source!==candFilters.source)return false;
-    if(candFilters.citizenship && (c.citizenship||'').toLowerCase()!==candFilters.citizenship.toLowerCase()) return false;
-    if(candFilters.direction && c.direction!==candFilters.direction) return false;
-    if(posQ){
-      const ph=((c.position||'')+' '+(c.currentRole||'')).toLowerCase();
-      if(!ph.includes(posQ)) return false;
-    }
+    // Cheap equality filters first — they discard more rows with less work than
+    // the string .includes() below. Ordering matters when the list is large.
+    if(fStatus && c.status!==fStatus) return false;
+    if(fSource && c.source!==fSource) return false;
+    if(fDir && c.direction!==fDir) return false;
+    if(fCit && (c.citizenship||'').toLowerCase()!==fCit) return false;
+    if(posQ && _candPosHay(c).indexOf(posQ)<0) return false;
+    if(q && _candSearchHay(c).indexOf(q)<0) return false;
     return true;
   });
   // Dynamic citizenship list — only shows values that actually exist so the dropdown
@@ -1380,7 +1407,7 @@ function renderCandidates(){
 
   el.innerHTML=`
 <div class="search-row">
-  <input class="search-input" id="cand-search-input" placeholder="🔍 Поиск…" value="${candSearch.replace(/"/g,'&quot;')}" oninput="candSearch=this.value;renderCandidates()">
+  <input class="search-input" id="cand-search-input" placeholder="🔍 Поиск…" value="${candSearch.replace(/"/g,'&quot;')}" oninput="onCandSearchInput(this.value)">
   <button class="filter-btn${candFilterOpen?' active':''}" onclick="candFilterOpen=!candFilterOpen;renderCandidates()">⚙ Фильтр${activeCount?' ('+activeCount+')':''}</button>
 </div>
 ${candFilterOpen?`
@@ -1403,7 +1430,7 @@ ${candFilterOpen?`
   </select>
 </div>
 <div style="margin-bottom:10px">
-  <input class="form-input" id="filter-pos" placeholder="💼 Фильтр по должности (напр. CFO, Аналитик)" value="${(candFilters.position||'').replace(/"/g,'&quot;')}" oninput="candFilters.position=this.value;renderCandidates()" style="font-size:13px;padding:8px 10px">
+  <input class="form-input" id="filter-pos" placeholder="💼 Фильтр по должности (напр. CFO, Аналитик)" value="${(candFilters.position||'').replace(/"/g,'&quot;')}" oninput="onCandPosInput(this.value)" style="font-size:13px;padding:8px 10px">
 </div>
 ${activeCount?`<div style="margin-bottom:10px;text-align:right"><button onclick="candFilters={status:'',source:'',citizenship:'',direction:'',position:''};renderCandidates()" style="background:none;border:none;color:#e74c3c;font-size:12px;cursor:pointer;font-weight:600;padding:4px 0">✕ Сбросить все фильтры</button></div>`:''}
 `:''}
@@ -1672,7 +1699,7 @@ function saveCandForm(id){
   const data={name,position:document.getElementById('cf-pos').value.trim(),company:document.getElementById('cf-co').value.trim(),citizenship:_normCitizenship(_val('cf-cit')),currentCompany:_val('cf-ccom'),currentRole:_val('cf-crole'),currentTenure:_val('cf-ctenure'),sourcedAt:_val('cf-srcdate'),status:document.getElementById('cf-st').value,vacancy:document.getElementById('cf-vac').value,source:document.getElementById('cf-src').value,rating:_stars,salaryMin:parseInt(document.getElementById('cf-s1').value)||0,salaryMax:parseInt(document.getElementById('cf-s2').value)||0,interviewDate:document.getElementById('cf-id').value,nextAction:document.getElementById('cf-nd').value,notes:document.getElementById('cf-no').value.trim(),phones,emails,socials,photo:(typeof pendingCandPhoto!=='undefined'&&pendingCandPhoto)?pendingCandPhoto:(id&&candidates.find(x=>x.id===id)?candidates.find(x=>x.id===id).photo:null)};
   // Auto-classify direction from the new position/role/company so filters work immediately.
   data.direction = _classifyDirection(data);
-  if(id){const c=candidates.find(x=>x.id===id);Object.assign(c,data);addLog(c,'Данные обновлены');pendingCandPhoto=null;saveData();closeSheet();renderScreen(currentTab);return;}
+  if(id){const c=candidates.find(x=>x.id===id);Object.assign(c,data);c._searchHay=null;c._posHay=null;addLog(c,'Данные обновлены');pendingCandPhoto=null;saveData();closeSheet();renderScreen(currentTab);return;}
   // New candidate — check for duplicates
   const newCand={id:genId(),...data,files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Кандидат добавлен',type:'note'}]};
   smartAddCandidate(newCand).then(function(res){
