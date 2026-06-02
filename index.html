@@ -4468,23 +4468,45 @@ function openTeaserModal(candidateId) {
         alert('✅ Тизер ' + teaser.code + ' опубликован в базе!');
       } catch(e) { alert('❌ Ошибка: ' + e.message); }
     }},
-    ...(alreadyPublished ? [{ text: '🗑 Снять с базы', cls: 'danger', action: async function() {
-      if (!confirm('Снять тизер ' + c.teaserCode + ' с базы?')) return;
-      const cfg = getPortalConfig();
-      try {
-        const r = await fetch(cfg.url + '/api/admin/teasers/' + encodeURIComponent(c.teaserCode), {
-          method: 'DELETE',
-          headers: { 'X-Admin-Secret': cfg.secret }
-        });
-        const j = await r.json();
-        if (!j.ok) throw new Error(j.error || 'Ошибка');
-        c.publishedToPortal = false; c.teaserCode = '';
-        await db.candidates.put(c);
-        candidates = candidates.map(x => x.id === c.id ? c : x);
-        closeModal(); openCandidateDetail(c.id);
-        alert('Тизер снят с базы.');
-      } catch(e) { alert('❌ ' + e.message); }
-    }}] : []),
+    ...(alreadyPublished ? [
+      { text: '📋 Telegram-пост', action: function() {
+        const t = collectTeaser();
+        const stars = '★'.repeat(t.rating||3) + '☆'.repeat(5-(t.rating||3));
+        const portalUrl = (getPortalConfig().url || 'https://select.hr-elenich.ru').replace(/\/+$/,'');
+        const post = '🆕 Новый кандидат в базе\n\n' +
+          t.code + ' · ' + t.role + '\n' + stars + '\n\n' +
+          (t.summary ? t.summary + '\n\n' : '') +
+          'Вилка: ' + t.salary + ' · ' + t.region + ' · ' + t.format + '\n' +
+          'Статус: 🟢 ' + t.availText + '\n\n' +
+          '→ Открыть профиль: ' + portalUrl + '/catalog';
+        // iOS-safe sync copy
+        var copied = false;
+        try {
+          const ta = document.createElement('textarea');
+          ta.value = post; ta.style.position='fixed'; ta.style.opacity='0';
+          document.body.appendChild(ta); ta.select();
+          copied = document.execCommand('copy');
+          document.body.removeChild(ta);
+        } catch(e){}
+        alert(copied ? '✅ Пост скопирован — вставьте в Telegram-канал' : '⚠️ Скопируйте текст вручную:\n\n' + post);
+      }},
+      { text: '🗑 Снять с базы', cls: 'danger', action: async function() {
+        if (!confirm('Снять тизер ' + c.teaserCode + ' с базы?')) return;
+        const cfg = getPortalConfig();
+        try {
+          const r = await fetch(cfg.url + '/api/admin/teasers/' + encodeURIComponent(c.teaserCode), {
+            method: 'DELETE', headers: { 'X-Admin-Secret': cfg.secret }
+          });
+          const j = await r.json();
+          if (!j.ok) throw new Error(j.error || 'Ошибка');
+          c.publishedToPortal = false; c.teaserCode = '';
+          await db.candidates.put(c);
+          candidates = candidates.map(x => x.id === c.id ? c : x);
+          closeModal(); openCandidateDetail(c.id);
+          alert('Тизер снят с базы.');
+        } catch(e) { alert('❌ ' + e.message); }
+      }}
+    ] : []),
     { text: 'Отмена', action: function() { closeModal(); } }
   ];
 
@@ -4679,7 +4701,7 @@ function openConsentModal(candidateId){
   html += '<textarea id="consent-msg" rows="9" style="width:100%;padding:10px;border:1.5px solid #ddd;border-radius:10px;font-size:12.5px;box-sizing:border-box;font-family:inherit;line-height:1.45;resize:vertical">' + msg.replace(/</g,'&lt;') + '</textarea>';
   html += '<div style="font-size:11px;color:#888;font-weight:700;margin:13px 0 5px;letter-spacing:.03em">ОТПРАВИТЬ КАНДИДАТУ</div>';
   html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
-  if (waP)   html += '<button onclick="consentSend(&quot;'+candidateId+'&quot;,&quot;whatsapp&quot;)" style="flex:1;min-width:88px;padding:10px;border:none;border-radius:8px;background:#25d366;color:#fff;font-weight:700;font-size:12px;cursor:pointer">💬 WhatsApp</button>';
+  html += '<button onclick="consentSend(&quot;'+candidateId+'&quot;,&quot;telegram&quot;)" style="flex:1;min-width:88px;padding:10px;border:none;border-radius:8px;background:#29a8eb;color:#fff;font-weight:700;font-size:12px;cursor:pointer">✈️ Telegram</button>';
   if (email) html += '<button onclick="consentSend(&quot;'+candidateId+'&quot;,&quot;email&quot;)" style="flex:1;min-width:88px;padding:10px;border:none;border-radius:8px;background:#1e7de8;color:#fff;font-weight:700;font-size:12px;cursor:pointer">✉️ Email</button>';
   html += '<button onclick="consentSend(&quot;'+candidateId+'&quot;,&quot;copy&quot;)" style="flex:1;min-width:88px;padding:10px;border:1px solid #ccc;border-radius:8px;background:#fff;font-weight:700;font-size:12px;cursor:pointer">📋 Копировать</button>';
   html += '</div>';
@@ -4700,16 +4722,35 @@ function openConsentModal(candidateId){
 async function consentSend(candidateId, channel){
   const c = candidates.find(x => x.id === candidateId); if (!c) return;
   const msg = (document.getElementById('consent-msg')||{}).value || buildConsentMessage(c);
-  if (channel === 'whatsapp'){
-    const waP = c.phones.find(p=>p.type==='WhatsApp') || c.phones[0];
-    if (waP) window.open('https://wa.me/' + waP.value.replace(/\D/g,'') + '?text=' + encodeURIComponent(msg), '_blank');
+
+  // iOS Safari: window.open/clipboard MUST run synchronously before any await.
+  // Keep all URL-opening here at the top — no awaits before this block.
+  if (channel === 'telegram'){
+    const tg = c.socials.find(s=>s.type==='Telegram');
+    const tgUser = tg ? tg.value.replace(/^@/,'') : null;
+    // Direct link if we have a username; generic share otherwise
+    const url = tgUser
+      ? 'https://t.me/' + tgUser + '?text=' + encodeURIComponent(msg)
+      : 'https://t.me/share/url?text=' + encodeURIComponent(msg);
+    window.open(url, '_blank');
   } else if (channel === 'email'){
     const email = c.emails[0];
-    if (email) window.location.href = 'mailto:' + email.value + '?subject=' + encodeURIComponent('Согласие — закрытая база кандидатов') + '&body=' + encodeURIComponent(msg);
+    if (email) window.location.href = 'mailto:' + email.value +
+      '?subject=' + encodeURIComponent('Согласие — закрытая база кандидатов') +
+      '&body=' + encodeURIComponent(msg);
   } else if (channel === 'copy'){
-    try { await navigator.clipboard.writeText(msg); alert('✅ Текст скопирован — вставьте в Telegram или любой мессенджер'); }
-    catch(e){ const ta=document.createElement('textarea'); ta.value=msg; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert('✅ Текст скопирован'); }
+    // Sync clipboard fallback — no await, works on iOS Safari
+    var copied = false;
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = msg; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      copied = document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch(e){}
+    alert(copied ? '✅ Текст скопирован — вставьте в Telegram или нужный мессенджер' : '⚠️ Скопируйте текст вручную из поля выше');
   }
+
   await _consentSetStatus(c, 'requested', channel);
   openConsentModal(candidateId);
 }
