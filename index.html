@@ -1306,6 +1306,9 @@ function renderDashboard(){
   <button onclick="aiPipelineInsights()" style="padding:13px;border:none;border-radius:12px;background:linear-gradient(135deg,#1e7de8,#6c3cf0);color:white;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(30,125,232,0.25);font-family:'Nunito',sans-serif;-webkit-tap-highlight-color:transparent;display:flex;align-items:center;justify-content:center;gap:6px">📊 AI Аналитика</button>
   <button onclick="aiCheckDuplicates()" style="padding:13px;border:none;border-radius:12px;background:linear-gradient(135deg,#f59e0b,#ef4444);color:white;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(245,158,11,0.25);font-family:'Nunito',sans-serif;-webkit-tap-highlight-color:transparent;display:flex;align-items:center;justify-content:center;gap:6px">🔍 Дубликаты</button>
 </div>
+<div class="b2b-row" style="margin:8px 0 4px">
+  <button onclick="openB2BDashboard()" style="width:100%;padding:14px;border:none;border-radius:12px;background:linear-gradient(135deg,#b08c3c,#8c641e);color:white;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(176,140,60,0.3);font-family:'Nunito',sans-serif;-webkit-tap-highlight-color:transparent;display:flex;align-items:center;justify-content:center;gap:8px">🔒 Закрытая база B2B<span id="b2b-badge" style="display:none;background:#fff;color:#8c641e;border-radius:20px;font-size:11px;padding:1px 8px;font-weight:800"></span></button>
+</div>
 <div class="dashboard-section">
   <div class="section-title">📞 Собеседования сегодня</div>
   ${todayIntv.length?todayIntv.map(c=>{
@@ -1343,6 +1346,7 @@ function renderDashboard(){
     </div>
   `).join(''):'<div class="empty-state"><div class="es-emoji">📭</div><p>Нет запланированных действий</p></div>'}
 </div>`;
+  if(typeof b2bUpdateBadge==='function') b2bUpdateBadge();
 }
 
 // ── SCREEN 1: CANDIDATES ──
@@ -4488,6 +4492,110 @@ function showPortalSettings() {
     }},
     { text: 'Отмена', action: function() { closeModal(); }}
   ]);
+}
+
+// ── B2B closed-base admin dashboard (members + disclosure requests) ──
+function b2bEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+async function b2bApi(path, method, body){
+  const cfg = getPortalConfig();
+  const h = { 'X-Admin-Secret': cfg.secret };
+  if (body) h['Content-Type'] = 'application/json';
+  const r = await fetch(cfg.url + path, { method: method||'GET', headers: h, body: body?JSON.stringify(body):undefined });
+  const j = await r.json().catch(()=>({ ok:false, error:'некорректный ответ' }));
+  if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP '+r.status));
+  return j;
+}
+
+async function openB2BDashboard(){
+  if (!isPortalConfigured()) { showPortalSettings(); return; }
+  let data;
+  try { data = await b2bApi('/api/admin/overview'); }
+  catch(e){ alert('❌ Не удалось загрузить базу: ' + e.message); return; }
+  const s = data.stats;
+  const statusLbl = {pending:'На рассмотрении',active:'Активен',expired:'Истёк',disabled:'Отключён',rejected:'Отклонён'};
+  const openReqs = data.requests.filter(r => r.status === 'pending');
+
+  let html = '<div style="font-size:13px;max-height:74vh;overflow-y:auto;padding-right:4px">';
+  html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:14px">' +
+    [['Компаний',s.total],['Активны',s.active],['Запросов',s.requests_open],['Тизеров',s.teasers]]
+    .map(([l,n])=>'<div style="background:#f6f4ef;border:1px solid #e8e2d6;border-radius:10px;padding:8px;text-align:center"><div style="font-size:18px;font-weight:800;color:#8c641e">'+n+'</div><div style="font-size:9px;color:#999;text-transform:uppercase;letter-spacing:.03em">'+l+'</div></div>').join('') + '</div>';
+
+  html += '<div style="background:#faf8f3;border:1px solid #e8e2d6;border-radius:10px;padding:11px;margin-bottom:14px">' +
+    '<div style="font-weight:700;margin-bottom:7px;font-size:12.5px">➕ Добавить компанию</div>' +
+    '<input id="b2b-email" type="email" placeholder="email компании" style="width:100%;padding:8px;border:1.5px solid #ddd;border-radius:8px;font-size:13px;box-sizing:border-box;margin-bottom:6px">' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">' +
+    '<input id="b2b-company" placeholder="Компания" style="padding:8px;border:1.5px solid #ddd;border-radius:8px;font-size:13px;box-sizing:border-box">' +
+    '<input id="b2b-name" placeholder="Контакт" style="padding:8px;border:1.5px solid #ddd;border-radius:8px;font-size:13px;box-sizing:border-box"></div>' +
+    '<button onclick="b2bCreateCompany()" style="width:100%;padding:9px;border:none;border-radius:8px;background:#1b2330;color:#fff;font-weight:700;font-size:12.5px;cursor:pointer">Добавить и выслать вход</button></div>';
+
+  if (openReqs.length){
+    html += '<div style="font-weight:700;margin:14px 0 7px;font-size:13px">📨 Запросы профилей ('+openReqs.length+')</div>';
+    openReqs.forEach(r=>{
+      html += '<div style="border:1px solid #ffe0b0;background:#fff9f0;border-radius:10px;padding:10px;margin-bottom:7px">' +
+        '<div style="font-weight:700">'+b2bEsc(r.candidate_code)+' · '+b2bEsc(r.candidate_role)+'</div>' +
+        '<div style="font-size:11.5px;color:#777;margin:2px 0">'+b2bEsc(r.company)+' · '+b2bEsc(r.member_name)+' · под: '+b2bEsc(r.position||'—')+'</div>' +
+        (r.comment?'<div style="font-size:11.5px;color:#999;font-style:italic">«'+b2bEsc(r.comment)+'»</div>':'') +
+        '<div style="display:flex;gap:6px;margin-top:6px">' +
+        '<button onclick="b2bReqAction('+r.id+',&quot;approve&quot;)" style="flex:1;padding:7px;border:none;border-radius:7px;background:#0a9e7e;color:#fff;font-weight:700;font-size:12px;cursor:pointer">✓ Одобрить</button>' +
+        '<button onclick="b2bReqAction('+r.id+',&quot;reject&quot;)" style="flex:1;padding:7px;border:1px solid #f0c0c0;border-radius:7px;background:#fff;color:#c0392b;font-weight:700;font-size:12px;cursor:pointer">Отклонить</button></div></div>';
+    });
+    html += '<div style="font-size:11px;color:#b08c3c;background:#fdf8ee;border-radius:8px;padding:8px;margin-bottom:6px">⚠️ После «Одобрить» — получите согласие кандидата на раскрытие (legal/04) и передайте профиль работодателю лично.</div>';
+  }
+
+  html += '<div style="font-weight:700;margin:14px 0 7px;font-size:13px">👥 Компании ('+data.members.length+')</div>';
+  if (!data.members.length) html += '<div style="color:#999;font-size:12px;margin-bottom:8px">Пока нет компаний</div>';
+  data.members.forEach(m=>{
+    html += '<div style="border:1px solid #eee;border-radius:10px;padding:10px;margin-bottom:7px">' +
+      '<div style="font-weight:700">'+b2bEsc(m.company||'—')+'</div>' +
+      '<div style="font-size:11.5px;color:#777">'+b2bEsc(m.email)+(m.name?' · '+b2bEsc(m.name):'')+'</div>' +
+      '<div style="font-size:11px;margin:3px 0"><span style="background:'+(m.is_active?'#e6f7ee':'#f0f0f0')+';color:'+(m.is_active?'#0a9e7e':'#999')+';padding:1px 7px;border-radius:10px;font-weight:700">'+(statusLbl[m.status]||m.status)+'</span> <span style="color:#aaa;text-transform:uppercase;font-size:10px">'+b2bEsc(m.group)+'</span></div>' +
+      '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">' +
+      (m.status==='pending'?'<button onclick="b2bMemberAction('+m.id+',&quot;approve&quot;)" style="padding:6px 10px;border:none;border-radius:7px;background:#1b2330;color:#fff;font-weight:600;font-size:11.5px;cursor:pointer">Одобрить</button>':'') +
+      '<button onclick="b2bMemberAction('+m.id+',&quot;resend&quot;)" style="padding:6px 10px;border:1px solid #ddd;border-radius:7px;background:#fff;font-weight:600;font-size:11.5px;cursor:pointer">Ссылка входа</button>' +
+      (m.status!=='disabled'?'<button onclick="b2bMemberAction('+m.id+',&quot;disable&quot;)" style="padding:6px 10px;border:1px solid #f0c0c0;border-radius:7px;background:#fff;color:#c0392b;font-weight:600;font-size:11.5px;cursor:pointer">Откл.</button>':'') +
+      '</div></div>';
+  });
+  html += '</div>';
+
+  showModal('🔒 Закрытая база B2B', html, [
+    { text: '🔄 Обновить', action: function(){ openB2BDashboard(); } },
+    { text: '⚙️ Настройки', action: function(){ showPortalSettings(); } },
+    { text: 'Закрыть', cls: 'primary', action: function(){ closeModal(); } }
+  ]);
+}
+
+async function b2bCreateCompany(){
+  const email   = (document.getElementById('b2b-email').value||'').trim();
+  const company = (document.getElementById('b2b-company').value||'').trim();
+  const name    = (document.getElementById('b2b-name').value||'').trim();
+  if (!email || email.indexOf('@') < 0){ alert('Укажите корректный email'); return; }
+  try {
+    await b2bApi('/api/admin/members', 'POST', { email, company, name, group:'free' });
+    alert('✅ Компания добавлена. Ссылка для входа отправлена на email.');
+    openB2BDashboard();
+  } catch(e){ alert(e.message==='exists' ? 'Компания с таким email уже существует' : '❌ '+e.message); }
+}
+
+async function b2bMemberAction(id, action){
+  if (action==='disable' && !confirm('Отключить доступ этой компании?')) return;
+  try { await b2bApi('/api/admin/members/'+id+'/'+action, 'POST'); openB2BDashboard(); }
+  catch(e){ alert('❌ '+e.message); }
+}
+
+async function b2bReqAction(id, action){
+  try { await b2bApi('/api/admin/requests/'+id+'/'+action, 'POST'); openB2BDashboard(); }
+  catch(e){ alert('❌ '+e.message); }
+}
+
+// Best-effort: show pending-request count on the dashboard button. Silent on any failure.
+async function b2bUpdateBadge(){
+  if (!isPortalConfigured()) return;
+  try {
+    const d = await b2bApi('/api/admin/overview');
+    const badge = document.getElementById('b2b-badge');
+    if (badge && d.stats.requests_open > 0){ badge.textContent = d.stats.requests_open + ' нов.'; badge.style.display = 'inline-block'; }
+  } catch(e){}
 }
 
 </script>
