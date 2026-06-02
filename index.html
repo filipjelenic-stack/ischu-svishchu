@@ -1368,7 +1368,7 @@ let candSearch='',candFilters={status:'',source:'',citizenship:'',direction:'',p
 // that made search feel laggy on large lists.
 function _candSearchHay(c){
   if(c && c._searchHay) return c._searchHay;
-  const s=[c.name,c.position,c.company,c.currentCompany,c.currentRole,c.citizenship,c.notes,DIRECTIONS[c.direction]||'',c.direction].map(x=>(x||'').toLowerCase()).join(' ');
+  const s=[c.name,c.position,c.company,c.currentCompany,c.currentRole,c.citizenship,c.notes,DIRECTIONS[c.direction]||'',c.direction,c.teaserCode||''].map(x=>(x||'').toLowerCase()).join(' ');
   if(c) c._searchHay=s;
   return s;
 }
@@ -1465,7 +1465,7 @@ ${candView==='list'?(filtered.length?filtered.map(c=>{
       <div class="card-position">${subLine}</div>
       <div class="card-meta">
         <span class="status-pill status-${c.status}">${STATUSES[c.status]||c.status}</span>
-        <span class="stars">${starsStr(c.rating)}</span>
+        ${c.publishedToPortal&&c.teaserCode?`<span style="font-size:10px;font-weight:700;background:#f0ebe0;color:#8c641e;border-radius:5px;padding:1px 6px;letter-spacing:.04em">${c.teaserCode}</span>`:''}
         ${(c.salaryMin||c.salaryMax)?`<span class="salary">${fmtSalary(c.salaryMin,c.salaryMax)}</span>`:''}
         ${c.source?`<span class="source-badge">${SOURCES[c.source]||c.source}</span>`:''}
       </div>
@@ -1575,7 +1575,7 @@ ${(c.currentCompany||c.currentRole||c.currentTenure)?`
   ${email?`<a class="quick-btn" href="${emailUrl}"><span class="qb-icon">✉️</span><span class="qb-label">Email</span></a>`:`<div class="quick-btn quick-btn-empty" onclick="openEditCandidate('${id}')" title="Добавить Email"><span class="qb-icon">✉️</span><span class="qb-label">Добавить</span><span class="qb-plus">+</span></div>`}
   <div class="quick-btn" onclick="aiAssessCandidate('${c.id}')" style="background:linear-gradient(135deg,rgba(30,125,232,.1),rgba(108,60,240,.1))"><span class="qb-icon">🤖</span><span class="qb-label">AI Оценка</span></div>
   <div class="quick-btn" onclick="aiComposeMessage('${c.id}')" style="background:linear-gradient(135deg,rgba(30,125,232,.1),rgba(108,60,240,.1))"><span class="qb-icon">✉️</span><span class="qb-label">AI Письмо</span></div>
-  <div class="quick-btn ${c.publishedToPortal?'qb-published':''}" onclick="openTeaserModal('${c.id}')" style="background:linear-gradient(135deg,rgba(180,140,60,.13),rgba(140,100,30,.07))"><span class="qb-icon">${c.publishedToPortal?'✅':'📤'}</span><span class="qb-label">${c.publishedToPortal?'В базе':'В базу'}</span></div>
+  <div class="quick-btn ${c.publishedToPortal?'qb-published':''}" onclick="openTeaserModal('${c.id}')" style="background:linear-gradient(135deg,rgba(180,140,60,.13),rgba(140,100,30,.07))"><span class="qb-icon">${c.publishedToPortal?'✅':'📤'}</span><span class="qb-label">${c.publishedToPortal?'В базе<br><span style="font-size:9px;font-weight:800;letter-spacing:.04em;opacity:.9">'+c.teaserCode+'</span>':'В базу'}</span></div>
 </div>
 ${(c.phones.length||c.emails.length||c.socials.length)?`
 <div style="margin-bottom:12px">
