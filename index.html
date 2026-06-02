@@ -521,6 +521,9 @@ function migrateCandidate(c){
   c.vacancyText     = c.vacancyText     || '';
   // Direction auto-classified from position/role/company the first time we see the record.
   if(!c.direction) c.direction = (typeof _classifyDirection==='function') ? _classifyDirection(c) : '';
+  // ── Portal teaser fields (added 2026-06) ──
+  c.teaserCode        = c.teaserCode        || '';   // set when first published to select.hr-elenich.ru
+  c.publishedToPortal = c.publishedToPortal || false; // true after successful publish
   return c;
 }
 function migrateVacancy(v){
@@ -1544,6 +1547,7 @@ ${(c.currentCompany||c.currentRole||c.currentTenure)?`
   ${email?`<a class="quick-btn" href="${emailUrl}"><span class="qb-icon">✉️</span><span class="qb-label">Email</span></a>`:`<div class="quick-btn quick-btn-empty" onclick="openEditCandidate('${id}')" title="Добавить Email"><span class="qb-icon">✉️</span><span class="qb-label">Добавить</span><span class="qb-plus">+</span></div>`}
   <div class="quick-btn" onclick="aiAssessCandidate('${c.id}')" style="background:linear-gradient(135deg,rgba(30,125,232,.1),rgba(108,60,240,.1))"><span class="qb-icon">🤖</span><span class="qb-label">AI Оценка</span></div>
   <div class="quick-btn" onclick="aiComposeMessage('${c.id}')" style="background:linear-gradient(135deg,rgba(30,125,232,.1),rgba(108,60,240,.1))"><span class="qb-icon">✉️</span><span class="qb-label">AI Письмо</span></div>
+  <div class="quick-btn ${c.publishedToPortal?'qb-published':''}" onclick="openTeaserModal('${c.id}')" style="background:linear-gradient(135deg,rgba(180,140,60,.13),rgba(140,100,30,.07))"><span class="qb-icon">${c.publishedToPortal?'✅':'📤'}</span><span class="qb-label">${c.publishedToPortal?'В базе':'В базу'}</span></div>
 </div>
 ${(c.phones.length||c.emails.length||c.socials.length)?`
 <div style="margin-bottom:12px">
@@ -4260,6 +4264,230 @@ async function aiPipelineInsights() {
       { text: 'Закрыть', cls: 'primary', action: function() { closeModal(); }}
     ]);
   } catch(err) { closeModal(); alert('Ошибка: ' + err.message); }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════
+// PORTAL INTEGRATION — publish candidate teasers to select.hr-elenich.ru
+// ═══════════════════════════════════════════════════════════════════
+
+function getPortalConfig() {
+  return {
+    url:    localStorage.getItem('ischu_portal_url')    || 'https://select.hr-elenich.ru',
+    secret: localStorage.getItem('ischu_portal_secret') || ''
+  };
+}
+
+function isPortalConfigured() {
+  const c = getPortalConfig();
+  return !!(c.url && c.secret);
+}
+
+function genTeaserCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s = 'HR-';
+  for (let i = 0; i < 4; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return s;
+}
+
+function fmtSalary(min, max) {
+  if (!min && !max) return '';
+  const f = n => n >= 1000 ? Math.round(n / 1000) + 'к' : String(n);
+  if (min && max) return f(min) + '–' + f(max) + ' ₽';
+  if (min) return 'от ' + f(min) + ' ₽';
+  return 'до ' + f(max) + ' ₽';
+}
+
+function buildTeaserDraft(c) {
+  const code  = c.teaserCode || genTeaserCode();
+  const salary = fmtSalary(c.salaryMin, c.salaryMax);
+  const avail  = ['hired','rejected','archive'].includes(c.status) ? 'passive' : 'active';
+  const availText = avail === 'active' ? 'Открыт к предложениям' : 'Рассматривает предложения';
+  // Auto-extract first sentence of notes as summary
+  const summary = (c.notes || '').split(/[.\n]/)[0].trim().slice(0, 200);
+  return {
+    code,
+    dir:       c.direction || 'other',
+    role:      c.position  || c.currentRole || '',
+    rating:    c.rating    || 3,
+    verified:  true,
+    skills:    [],
+    exp:       '',
+    salary,
+    salaryMax: c.salaryMax || 0,
+    region:    '',
+    format:    'Гибрид / удалёнка',
+    reloc:     'Не указано',
+    lang:      '',
+    edu:       '',
+    avail,
+    availText,
+    addedAt:   Math.floor(Date.now() / 1000),
+    summary,
+    strengths: ['', '', ''],
+    note:      ''
+  };
+}
+
+function openTeaserModal(candidateId) {
+  if (!isPortalConfigured()) { showPortalSettings(); return; }
+  const c = candidates.find(x => x.id === candidateId);
+  if (!c) return;
+  const d = buildTeaserDraft(c);
+  const alreadyPublished = c.publishedToPortal && c.teaserCode;
+
+  const fieldRow = (label, id, val, type) => `
+    <div style="margin-bottom:10px">
+      <label style="font-size:11px;color:#888;font-weight:600;display:block;margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em">${label}</label>
+      ${type === 'textarea'
+        ? `<textarea id="${id}" rows="3" style="width:100%;padding:9px 11px;border:1.5px solid #ddd;border-radius:10px;font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit">${val||''}</textarea>`
+        : `<input id="${id}" type="text" value="${(val||'').replace(/"/g,'&quot;')}" style="width:100%;padding:9px 11px;border:1.5px solid #ddd;border-radius:10px;font-size:13px;box-sizing:border-box">`
+      }
+    </div>`;
+
+  const selectRow = (label, id, val, opts) => `
+    <div style="margin-bottom:10px">
+      <label style="font-size:11px;color:#888;font-weight:600;display:block;margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em">${label}</label>
+      <select id="${id}" style="width:100%;padding:9px 11px;border:1.5px solid #ddd;border-radius:10px;font-size:13px;box-sizing:border-box;background:#fff">
+        ${opts.map(([v,l])=>`<option value="${v}"${v===val?' selected':''}>${l}</option>`).join('')}
+      </select>
+    </div>`;
+
+  let html = `<div style="font-size:13px;max-height:72vh;overflow-y:auto;padding-right:4px">`;
+  if (alreadyPublished) {
+    html += `<div style="background:#eaf7ee;border:1px solid #bfe6cc;border-radius:8px;padding:9px 13px;margin-bottom:14px;font-size:12.5px;color:#1d7a3e">
+      ✅ Уже в базе как <b>${c.teaserCode}</b>. Отредактируйте и нажмите «Обновить», или «Снять с базы».
+    </div>`;
+  }
+  html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px">
+    <div>${fieldRow('Код тизера', 'pt-code', d.code)}</div>
+    <div>${selectRow('Рейтинг', 'pt-rating', String(d.rating), [['1','★☆☆☆☆'],['2','★★☆☆☆'],['3','★★★☆☆'],['4','★★★★☆'],['5','★★★★★']])}</div>
+  </div>
+  ${fieldRow('Роль (анонимно)', 'pt-role', d.role)}
+  ${fieldRow('Зарплатная вилка', 'pt-salary', d.salary)}
+  ${fieldRow('Регион', 'pt-region', d.region)}
+  ${fieldRow('Навыки (через запятую)', 'pt-skills', (d.skills||[]).join(', '))}
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px">
+    <div>${fieldRow('Опыт', 'pt-exp', d.exp)}</div>
+    <div>${fieldRow('Язык', 'pt-lang', d.lang)}</div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px">
+    <div>${selectRow('Формат', 'pt-format', d.format, [['Офис','Офис'],['Гибрид / удалёнка','Гибрид / удалёнка'],['Удалённо','Удалённо']])}</div>
+    <div>${selectRow('Статус', 'pt-avail', d.avail, [['active','🟢 Открыт'],['passive','🔵 Пассивен']])}</div>
+  </div>
+  ${fieldRow('Текст статуса', 'pt-availText', d.availText)}
+  ${fieldRow('Краткое резюме (анонимно)', 'pt-summary', d.summary, 'textarea')}
+  ${fieldRow('Сильная сторона 1', 'pt-s1', d.strengths[0])}
+  ${fieldRow('Сильная сторона 2', 'pt-s2', d.strengths[1])}
+  ${fieldRow('Сильная сторона 3', 'pt-s3', d.strengths[2])}
+  ${fieldRow('Заметка Юлии (не раскрывается)', 'pt-note', d.note, 'textarea')}
+  <div style="font-size:11px;color:#aaa;margin-top:4px">Имя, контакты, фото и работодатель НЕ передаются. Только поля выше.</div>
+  </div>`;
+
+  const collectTeaser = () => ({
+    code:      document.getElementById('pt-code').value.trim(),
+    dir:       d.dir,
+    role:      document.getElementById('pt-role').value.trim(),
+    rating:    parseInt(document.getElementById('pt-rating').value),
+    verified:  true,
+    skills:    document.getElementById('pt-skills').value.split(',').map(s=>s.trim()).filter(Boolean),
+    exp:       document.getElementById('pt-exp').value.trim(),
+    salary:    document.getElementById('pt-salary').value.trim(),
+    salaryMax: c.salaryMax || 0,
+    region:    document.getElementById('pt-region').value.trim(),
+    format:    document.getElementById('pt-format').value,
+    reloc:     d.reloc,
+    lang:      document.getElementById('pt-lang').value.trim(),
+    edu:       d.edu,
+    avail:     document.getElementById('pt-avail').value,
+    availText: document.getElementById('pt-availText').value.trim(),
+    addedAt:   d.addedAt,
+    summary:   document.getElementById('pt-summary').value.trim(),
+    strengths: [
+      document.getElementById('pt-s1').value.trim(),
+      document.getElementById('pt-s2').value.trim(),
+      document.getElementById('pt-s3').value.trim()
+    ].filter(Boolean),
+    note:      document.getElementById('pt-note').value.trim()
+  });
+
+  const btns = [
+    { text: alreadyPublished ? '🔄 Обновить' : '📤 Опубликовать', cls: 'primary', action: async function() {
+      const teaser = collectTeaser();
+      if (!teaser.code || !teaser.role) { alert('Укажите код и роль'); return; }
+      const cfg = getPortalConfig();
+      try {
+        const r = await fetch(cfg.url + '/api/admin/teasers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Secret': cfg.secret },
+          body: JSON.stringify(teaser)
+        });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || 'Ошибка сервера');
+        c.teaserCode = teaser.code;
+        c.publishedToPortal = true;
+        await db.candidates.put(c);
+        candidates = candidates.map(x => x.id === c.id ? c : x);
+        closeModal();
+        openCandidateDetail(c.id);
+        alert('✅ Тизер ' + teaser.code + ' опубликован в базе!');
+      } catch(e) { alert('❌ Ошибка: ' + e.message); }
+    }},
+    ...(alreadyPublished ? [{ text: '🗑 Снять с базы', cls: 'danger', action: async function() {
+      if (!confirm('Снять тизер ' + c.teaserCode + ' с базы?')) return;
+      const cfg = getPortalConfig();
+      try {
+        const r = await fetch(cfg.url + '/api/admin/teasers/' + encodeURIComponent(c.teaserCode), {
+          method: 'DELETE',
+          headers: { 'X-Admin-Secret': cfg.secret }
+        });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || 'Ошибка');
+        c.publishedToPortal = false; c.teaserCode = '';
+        await db.candidates.put(c);
+        candidates = candidates.map(x => x.id === c.id ? c : x);
+        closeModal(); openCandidateDetail(c.id);
+        alert('Тизер снят с базы.');
+      } catch(e) { alert('❌ ' + e.message); }
+    }}] : []),
+    { text: 'Отмена', action: function() { closeModal(); } }
+  ];
+
+  showModal((alreadyPublished ? '✏️ Редактировать тизер' : '📤 Опубликовать в базу') + ' — ' + (c.name||'кандидат'), html, btns);
+}
+
+// ── Portal settings (same pattern as AI settings) ──
+function showPortalSettings() {
+  const cfg = getPortalConfig();
+  let html = '<div style="font-size:13px">';
+  html += '<p style="color:#666;margin-bottom:12px">Подключение к закрытой базе кандидатов select.hr-elenich.ru:</p>';
+  html += '<div style="margin-bottom:10px"><label style="font-size:12px;color:#999;display:block;margin-bottom:3px">URL портала</label>';
+  html += '<input id="p-url" type="url" value="' + (cfg.url||'') + '" placeholder="https://select.hr-elenich.ru" style="width:100%;padding:10px;border:1.5px solid #ddd;border-radius:10px;font-size:14px;box-sizing:border-box"></div>';
+  html += '<div style="margin-bottom:10px"><label style="font-size:12px;color:#999;display:block;margin-bottom:3px">Admin Secret</label>';
+  html += '<input id="p-secret" type="password" value="' + (cfg.secret||'') + '" placeholder="Из .env файла портала" style="width:100%;padding:10px;border:1.5px solid #ddd;border-radius:10px;font-size:14px;box-sizing:border-box"></div>';
+  html += '<div style="padding:10px;background:#fdf8f0;border:1px solid #e8d9b8;border-radius:8px;font-size:11px;color:#666">🔒 Секрет хранится только в вашем браузере (localStorage). Никуда не отправляется кроме портала.</div>';
+  html += '</div>';
+  showModal('⚙️ Настройки базы кандидатов', html, [
+    { text: 'Сохранить', cls: 'primary', action: async function() {
+      const url = document.getElementById('p-url').value.trim().replace(/\/+$/,'');
+      const secret = document.getElementById('p-secret').value.trim();
+      localStorage.setItem('ischu_portal_url', url);
+      localStorage.setItem('ischu_portal_secret', secret);
+      closeModal();
+      if (url && secret) alert('✅ База кандидатов настроена!');
+    }},
+    { text: 'Тест', action: async function() {
+      const url = document.getElementById('p-url').value.trim().replace(/\/+$/,'');
+      const secret = document.getElementById('p-secret').value.trim();
+      try {
+        const r = await fetch(url + '/health');
+        const j = await r.json();
+        if (j.status === 'ok') alert('✅ Портал доступен!');
+        else alert('⚠️ Ответ: ' + JSON.stringify(j));
+      } catch(e) { alert('❌ Не удалось подключиться: ' + e.message); }
+    }},
+    { text: 'Отмена', action: function() { closeModal(); }}
+  ]);
 }
 
 </script>
