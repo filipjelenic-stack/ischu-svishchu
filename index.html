@@ -457,6 +457,7 @@ function showIntro(){
   <div class="screen" id="screen-4"></div>
 </div>
 <button class="fab" id="fab-btn" style="display:none" onclick="fabAction()">+</button>
+<input type="file" id="backup-restore-input" accept="application/json,.json" style="display:none" onchange="if(this.files[0]){importFullBackup(this.files[0]);this.value='';}">
 <div class="sheet-backdrop" id="sheet-backdrop" onclick="closeSheet()"></div>
 <div class="bottom-sheet" id="bottom-sheet">
   <div class="sheet-grip" id="sheet-grip" onclick="closeSheet()">
@@ -1314,6 +1315,9 @@ function renderDashboard(){
 </div>
 <div class="b2b-row" style="margin:8px 0 4px">
   <button onclick="openB2BDashboard()" style="width:100%;padding:14px;border:none;border-radius:12px;background:linear-gradient(135deg,#b08c3c,#8c641e);color:white;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(176,140,60,0.3);font-family:'Nunito',sans-serif;-webkit-tap-highlight-color:transparent;display:flex;align-items:center;justify-content:center;gap:8px">🔒 Закрытая база B2B<span id="b2b-badge" style="display:none;background:#fff;color:#8c641e;border-radius:20px;font-size:11px;padding:1px 8px;font-weight:800"></span></button>
+</div>
+<div class="backup-row" style="margin:8px 0 4px">
+  <button onclick="openBackupModal()" style="width:100%;padding:11px;border:1px solid rgba(255,255,255,0.12);border-radius:12px;background:rgba(255,255,255,0.04);color:rgba(255,255,255,0.75);font-size:12.5px;font-weight:700;cursor:pointer;font-family:'Nunito',sans-serif;-webkit-tap-highlight-color:transparent;display:flex;align-items:center;justify-content:center;gap:7px">💾 Резервная копия (полная)</button>
 </div>
 <div class="dashboard-section">
   <div class="section-title">📞 Собеседования сегодня</div>
@@ -4716,6 +4720,88 @@ async function consentMark(candidateId, status){
   await _consentSetStatus(c, status);
   closeModal();
   openCandidateDetail(candidateId);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// FULL BACKUP & RESTORE — complete IndexedDB dump incl. file blobs (base64).
+// The CSV/Excel export is lossy (no photos/files/history); this is the real backup.
+// ═══════════════════════════════════════════════════════════════════
+
+function _blobToDataUrl(blob){
+  return new Promise(resolve => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => resolve(null);
+    r.readAsDataURL(blob);
+  });
+}
+
+function openBackupModal(){
+  let html = '<div style="font-size:13px">';
+  html += '<p style="color:#666;margin-bottom:12px;line-height:1.5">Полная резервная копия — все кандидаты, вакансии, задачи, фотографии, прикреплённые файлы и история. Один файл .json. Подходит для переноса на другое устройство и восстановления.</p>';
+  html += '<button onclick="exportFullBackup()" style="width:100%;padding:13px;border:none;border-radius:10px;background:linear-gradient(135deg,#0a9e7e,#0a6ab8);color:#fff;font-weight:700;font-size:13.5px;cursor:pointer;margin-bottom:9px">⬇️ Скачать резервную копию</button>';
+  html += '<button onclick="document.getElementById(&quot;backup-restore-input&quot;).click()" style="width:100%;padding:13px;border:1.5px solid #ddd;border-radius:10px;background:#fff;color:#1b2330;font-weight:700;font-size:13.5px;cursor:pointer">⬆️ Восстановить из файла</button>';
+  html += '<div style="font-size:11px;color:#a93226;background:#fdf3f2;border-radius:8px;padding:9px;margin-top:11px">⚠️ Восстановление <b>заменит</b> текущие данные данными из файла. Перед восстановлением сделайте свежую копию.</div>';
+  html += '</div>';
+  showModal('💾 Резервная копия', html, [
+    { text: 'Закрыть', cls: 'primary', action: function(){ closeModal(); } }
+  ]);
+}
+
+async function exportFullBackup(){
+  try {
+    const [cands, vacs, tsks, files] = await Promise.all([
+      db.candidates.toArray(), db.vacancies.toArray(), db.tasks.toArray(), db.files.toArray()
+    ]);
+    const filesEnc = [];
+    for (const f of files){
+      const data = f.blob ? await _blobToDataUrl(f.blob) : null;
+      filesEnc.push({ id: f.id, candidateId: f.candidateId, data });
+    }
+    const backup = {
+      app: 'ischu-svishchu', schema: 2, exportedAt: new Date().toISOString(),
+      counts: { candidates: cands.length, vacancies: vacs.length, tasks: tsks.length, files: filesEnc.length },
+      candidates: cands, vacancies: vacs, tasks: tsks, files: filesEnc
+    };
+    const blob = new Blob([JSON.stringify(backup)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'ischu-backup-' + todayStr() + '.json';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(a.href), 2000);
+  } catch(e){ alert('Ошибка при создании копии: ' + e.message); }
+}
+
+async function importFullBackup(file){
+  let backup;
+  try { backup = JSON.parse(await file.text()); }
+  catch(e){ alert('Файл повреждён или не является резервной копией.'); return; }
+  if (!backup || backup.app !== 'ischu-svishchu' || !Array.isArray(backup.candidates)){
+    alert('Это не похоже на резервную копию Ищу-Свищу.'); return;
+  }
+  const msg = 'Восстановить резервную копию от ' + (backup.exportedAt ? backup.exportedAt.slice(0,10) : '?') + '?\n\n' +
+    'Кандидатов: ' + backup.candidates.length + '\n' +
+    'Вакансий: ' + (backup.vacancies||[]).length + '\n' +
+    'Задач: ' + (backup.tasks||[]).length + '\n' +
+    'Файлов: ' + (backup.files||[]).length + '\n\n' +
+    '⚠️ ТЕКУЩИЕ ДАННЫЕ БУДУТ ЗАМЕНЕНЫ.';
+  if (!confirm(msg)) return;
+  try {
+    await db.transaction('rw', db.candidates, db.vacancies, db.tasks, db.files, async () => {
+      await db.candidates.clear(); await db.vacancies.clear(); await db.tasks.clear(); await db.files.clear();
+      await db.candidates.bulkPut(backup.candidates.map(migrateCandidate).filter(Boolean));
+      if (Array.isArray(backup.vacancies)) await db.vacancies.bulkPut(backup.vacancies.map(migrateVacancy).filter(Boolean));
+      if (Array.isArray(backup.tasks))     await db.tasks.bulkPut(backup.tasks.map(migrateTask).filter(Boolean));
+      if (Array.isArray(backup.files)){
+        for (const f of backup.files){
+          const blob = f.data ? _dataUrlToBlobSync(f.data) : null;
+          if (blob) await db.files.put({ id: f.id, candidateId: f.candidateId, blob });
+        }
+      }
+    });
+    alert('✅ Восстановлено. Приложение перезагрузится.');
+    location.reload();
+  } catch(e){ alert('Ошибка восстановления: ' + e.message); }
 }
 
 </script>
