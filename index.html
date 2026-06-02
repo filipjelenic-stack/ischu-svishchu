@@ -4731,13 +4731,26 @@ async function consentSend(candidateId, channel){
   // iOS Safari: window.open/clipboard MUST run synchronously before any await.
   // Keep all URL-opening here at the top — no awaits before this block.
   if (channel === 'telegram'){
-    const tg = c.socials.find(s=>s.type==='Telegram');
-    const tgUser = tg ? tg.value.replace(/^@/,'') : null;
-    // Direct link if we have a username; generic share otherwise
-    const url = tgUser
-      ? 'https://t.me/' + tgUser + '?text=' + encodeURIComponent(msg)
-      : 'https://t.me/share/url?text=' + encodeURIComponent(msg);
-    window.open(url, '_blank');
+    // Telegram has no URL to pre-fill a message to a contact.
+    // Best UX: copy text to clipboard, then open the chat (user just pastes).
+    var tgCopied = false;
+    try {
+      var ta2 = document.createElement('textarea');
+      ta2.value = msg; ta2.style.position='fixed'; ta2.style.opacity='0';
+      document.body.appendChild(ta2); ta2.select();
+      tgCopied = document.execCommand('copy');
+      document.body.removeChild(ta2);
+    } catch(e){}
+    var tg = c.socials.find(function(s){ return s.type==='Telegram'; });
+    var tgUser = tg ? tg.value.replace(/^@/,'') : null;
+    if (tgUser) {
+      // Open the specific chat — user pastes the already-copied text
+      window.open('https://t.me/' + tgUser, '_blank');
+      alert('✅ Текст скопирован. Чат с ' + (tg.value) + ' открывается — вставьте сообщение и отправьте.');
+    } else {
+      alert((tgCopied ? '✅ Текст скопирован!' : '⚠️ Скопируйте текст из поля выше.') +
+            '\nОткройте Telegram, найдите кандидата и вставьте сообщение.');
+    }
   } else if (channel === 'email'){
     const email = c.emails[0];
     if (email) window.location.href = 'mailto:' + email.value +
