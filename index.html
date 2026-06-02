@@ -524,6 +524,12 @@ function migrateCandidate(c){
   // ── Portal teaser fields (added 2026-06) ──
   c.teaserCode        = c.teaserCode        || '';   // set when first published to select.hr-elenich.ru
   c.publishedToPortal = c.publishedToPortal || false; // true after successful publish
+  // ── Consent fields (152-ФЗ; legal/02+03, docs/21) ──
+  c.consentStatus      = c.consentStatus      || ''; // '' | requested | granted | declined | withdrawn
+  c.consentChannel     = c.consentChannel     || ''; // whatsapp | telegram | email | other
+  c.consentRequestedAt = c.consentRequestedAt || ''; // date string
+  c.consentGrantedAt   = c.consentGrantedAt   || ''; // date string
+  c.consentNote        = c.consentNote        || ''; // proof reference / free note
   return c;
 }
 function migrateVacancy(v){
@@ -1505,7 +1511,14 @@ function openCandidateDetail(id){
   const waUrl=waP?'https://wa.me/'+waP.value.replace(/\D/g,''):'#';
   const tgUrl=tg?(tg.value.startsWith('@')?'https://t.me/'+tg.value.slice(1):'https://t.me/'+tg.value.replace(/\D/g,'')):'#';
   const emailUrl=email?'mailto:'+email.value:'#';
-  // Pre-build files list HTML to avoid nested template literal escaping bugs
+  // Consent display state (см. legal/02+03 + docs/21)
+  const _cs = c.consentStatus || '';
+  const consentView = ({
+    granted:   {label:'Получено',   color:'#0a9e7e', bg:'#eafaf1', border:'#bfe6cc', btn:'#0a9e7e', btnLabel:'Согласие ✓'},
+    requested: {label:'Запрошено',  color:'#b8860b', bg:'#fdf8ec', border:'#ecd9a8', btn:'#b8860b', btnLabel:'Согласие…'},
+    declined:  {label:'Отказался',  color:'#c0392b', bg:'#fdeeec', border:'#f0c0c0', btn:'#8896a8', btnLabel:'Согласие'},
+    withdrawn: {label:'Отозвано',   color:'#c0392b', bg:'#fdeeec', border:'#f0c0c0', btn:'#8896a8', btnLabel:'Согласие'},
+  })[_cs] || {label:'Нет согласия', color:'#8896a8', bg:'#f4f6f9', border:'#e3e8ef', btn:'#1b2330', btnLabel:'Запросить согласие'};
   const filesList=(c.files||[]).map(f=>
     '<div class="file-item">'+
       '<div class="file-item-icon">'+fileIcon(f.name)+'</div>'+
@@ -1529,6 +1542,13 @@ function openCandidateDetail(id){
 <div class="form-label" style="margin-bottom:8px">Статус</div>
 <div class="status-row">
   ${STATUS_ORDER.map(s=>`<span class="status-pick status-pill status-${s}${c.status===s?' active':''}" onclick="setCandStatus('${id}','${s}')">${STATUSES[s]}</span>`).join('')}
+</div>
+<div style="margin:10px 0;padding:10px 12px;border-radius:10px;border:1.5px solid ${consentView.border};background:${consentView.bg};display:flex;align-items:center;justify-content:space-between;gap:8px">
+  <div style="min-width:0">
+    <div style="font-size:10px;color:#6b87b0;font-weight:700;text-transform:uppercase;letter-spacing:.03em">📋 Согласие на базу и тизер</div>
+    <div style="font-weight:700;font-size:13px;color:${consentView.color}">${consentView.label}${c.consentGrantedAt?' · '+fmtDate(c.consentGrantedAt):(c.consentRequestedAt?' · '+fmtDate(c.consentRequestedAt):'')}</div>
+  </div>
+  <button onclick="openConsentModal('${id}')" style="padding:8px 13px;border:none;border-radius:8px;background:${consentView.btn};color:#fff;font-weight:700;font-size:12px;cursor:pointer;white-space:nowrap;font-family:'Nunito',sans-serif;-webkit-tap-highlight-color:transparent">${consentView.btnLabel}</button>
 </div>
 ${(c.currentCompany||c.currentRole||c.currentTenure)?`
 <div style="padding:10px;background:#f7faff;border-radius:10px;border-left:3px solid #1e7de8;margin-bottom:10px;font-size:12px">
@@ -4363,6 +4383,12 @@ function openTeaserModal(candidateId) {
       ✅ Уже в базе как <b>${c.teaserCode}</b>. Отредактируйте и нажмите «Обновить», или «Снять с базы».
     </div>`;
   }
+  if (c.consentStatus !== 'granted') {
+    html += `<div style="background:#fdf3f2;border:1px solid #f0c0c0;border-radius:8px;padding:10px 13px;margin-bottom:14px;font-size:12.5px;color:#a93226">
+      ⚠️ Согласие кандидата не отмечено как «получено». Публиковать тизер можно только при наличии согласия (152-ФЗ).
+      <button onclick="closeModal();openConsentModal('${c.id}')" style="margin-top:7px;padding:6px 11px;border:none;border-radius:7px;background:#a93226;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer">Перейти к согласию</button>
+    </div>`;
+  }
   html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px">
     <div>${fieldRow('Код тизера', 'pt-code', d.code)}</div>
     <div>${selectRow('Рейтинг', 'pt-rating', String(d.rating), [['1','★☆☆☆☆'],['2','★★☆☆☆'],['3','★★★☆☆'],['4','★★★★☆'],['5','★★★★★']])}</div>
@@ -4419,6 +4445,7 @@ function openTeaserModal(candidateId) {
     { text: alreadyPublished ? '🔄 Обновить' : '📤 Опубликовать', cls: 'primary', action: async function() {
       const teaser = collectTeaser();
       if (!teaser.code || !teaser.role) { alert('Укажите код и роль'); return; }
+      if (c.consentStatus !== 'granted' && !confirm('⚠️ Согласие кандидата не отмечено как «получено».\n\nПубликуйте тизер только при наличии согласия (152-ФЗ).\n\nПодтверждаете, что согласие есть, и публикуете?')) return;
       const cfg = getPortalConfig();
       try {
         const r = await fetch(cfg.url + '/api/admin/teasers', {
@@ -4596,6 +4623,93 @@ async function b2bUpdateBadge(){
     const badge = document.getElementById('b2b-badge');
     if (badge && d.stats.requests_open > 0){ badge.textContent = d.stats.requests_open + ' нов.'; badge.style.display = 'inline-block'; }
   } catch(e){}
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CONSENT — request & track candidate consent (152-ФЗ; legal/02+03, docs/21)
+// ═══════════════════════════════════════════════════════════════════
+
+function _consentFirstName(c){
+  // CRM хранит «Имя Фамилия» → первое слово = имя. Текст всё равно редактируется перед отправкой.
+  return (c.name||'').trim().split(/\s+/)[0] || '';
+}
+
+function buildConsentMessage(c){
+  const name = _consentFirstName(c);
+  return 'Привет' + (name ? ', ' + name : '') + '!\n\n' +
+    'Хочу добавить тебя в мою закрытую базу кандидатов — туда, где я работаю с компаниями напрямую. ' +
+    'Покажу тебя как анонимный профиль: роль, уровень, навыки, зарплатная вилка, регион — без имени, ' +
+    'контактов и работодателей. Полные данные раскрываю только тебе лично, если появится конкретный интерес.\n\n' +
+    'Нужно твоё согласие на:\n1) хранение твоих данных в моей базе;\n2) показ анонимного профиля закрытому кругу работодателей.\n\n' +
+    'Полные условия: https://select.hr-elenich.ru/terms\n\n' +
+    'Если всё ок — просто ответь «Да». Отозвать согласие можно в любой момент.';
+}
+
+async function _consentSetStatus(c, status, channel){
+  c.consentStatus = status;
+  if (status === 'requested'){ c.consentRequestedAt = todayStr(); if (channel && channel!=='copy') c.consentChannel = channel; }
+  if (status === 'granted'){ c.consentGrantedAt = todayStr(); }
+  const lbl = {requested:'Запрошено согласие', granted:'Согласие получено', declined:'Кандидат отказал в согласии', withdrawn:'Согласие отозвано'}[status] || status;
+  c.activityLog = c.activityLog || [];
+  c.activityLog.push({ id: genId(), date: todayStr(), text: '📋 ' + lbl + (channel && channel!=='copy' ? ' ('+channel+')' : ''), type: 'consent' });
+  await db.candidates.put(c);
+  candidates = candidates.map(x => x.id === c.id ? c : x);
+}
+
+function openConsentModal(candidateId){
+  const c = candidates.find(x => x.id === candidateId); if (!c) return;
+  const msg = buildConsentMessage(c);
+  const waP = c.phones.find(p=>p.type==='WhatsApp') || c.phones[0];
+  const email = c.emails[0];
+  const statusLbl = {granted:'✅ Согласие получено', requested:'🟡 Запрошено', declined:'❌ Отказался', withdrawn:'⊘ Отозвано'}[c.consentStatus] || '⚪ Нет согласия';
+
+  let html = '<div style="font-size:13px;max-height:74vh;overflow-y:auto;padding-right:4px">';
+  html += '<div style="margin-bottom:10px;font-weight:700;font-size:14px">' + statusLbl + (c.consentGrantedAt ? ' · ' + fmtDate(c.consentGrantedAt) : '') + '</div>';
+  html += '<label style="font-size:11px;color:#888;font-weight:600;display:block;margin-bottom:3px">ТЕКСТ ЗАПРОСА (можно изменить перед отправкой)</label>';
+  html += '<textarea id="consent-msg" rows="9" style="width:100%;padding:10px;border:1.5px solid #ddd;border-radius:10px;font-size:12.5px;box-sizing:border-box;font-family:inherit;line-height:1.45;resize:vertical">' + msg.replace(/</g,'&lt;') + '</textarea>';
+  html += '<div style="font-size:11px;color:#888;font-weight:700;margin:13px 0 5px;letter-spacing:.03em">ОТПРАВИТЬ КАНДИДАТУ</div>';
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+  if (waP)   html += '<button onclick="consentSend(&quot;'+candidateId+'&quot;,&quot;whatsapp&quot;)" style="flex:1;min-width:88px;padding:10px;border:none;border-radius:8px;background:#25d366;color:#fff;font-weight:700;font-size:12px;cursor:pointer">💬 WhatsApp</button>';
+  if (email) html += '<button onclick="consentSend(&quot;'+candidateId+'&quot;,&quot;email&quot;)" style="flex:1;min-width:88px;padding:10px;border:none;border-radius:8px;background:#1e7de8;color:#fff;font-weight:700;font-size:12px;cursor:pointer">✉️ Email</button>';
+  html += '<button onclick="consentSend(&quot;'+candidateId+'&quot;,&quot;copy&quot;)" style="flex:1;min-width:88px;padding:10px;border:1px solid #ccc;border-radius:8px;background:#fff;font-weight:700;font-size:12px;cursor:pointer">📋 Копировать</button>';
+  html += '</div>';
+  html += '<div style="font-size:11px;color:#888;font-weight:700;margin:15px 0 5px;letter-spacing:.03em">ОТМЕТИТЬ РЕЗУЛЬТАТ</div>';
+  html += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+  html += '<button onclick="consentMark(&quot;'+candidateId+'&quot;,&quot;granted&quot;)" style="flex:1;min-width:88px;padding:10px;border:none;border-radius:8px;background:#0a9e7e;color:#fff;font-weight:700;font-size:12px;cursor:pointer">✓ Получено</button>';
+  html += '<button onclick="consentMark(&quot;'+candidateId+'&quot;,&quot;declined&quot;)" style="flex:1;min-width:88px;padding:10px;border:1px solid #f0c0c0;border-radius:8px;background:#fff;color:#c0392b;font-weight:700;font-size:12px;cursor:pointer">✗ Отказ</button>';
+  if (c.consentStatus === 'granted') html += '<button onclick="consentMark(&quot;'+candidateId+'&quot;,&quot;withdrawn&quot;)" style="flex:1;min-width:88px;padding:10px;border:1px solid #ddd;border-radius:8px;background:#fff;font-weight:700;font-size:12px;cursor:pointer">⊘ Отозвать</button>';
+  html += '</div>';
+  html += '<div style="font-size:11px;color:#b8860b;background:#fdf8ec;border-radius:8px;padding:9px;margin-top:13px">💡 После «Получено» прикрепите скриншот ответа кандидата в разделе «📎 Файлы» карточки — как доказательство согласия.</div>';
+  html += '</div>';
+
+  showModal('📋 Согласие — ' + (c.name||''), html, [
+    { text: 'Закрыть', cls: 'primary', action: function(){ closeModal(); } }
+  ]);
+}
+
+async function consentSend(candidateId, channel){
+  const c = candidates.find(x => x.id === candidateId); if (!c) return;
+  const msg = (document.getElementById('consent-msg')||{}).value || buildConsentMessage(c);
+  if (channel === 'whatsapp'){
+    const waP = c.phones.find(p=>p.type==='WhatsApp') || c.phones[0];
+    if (waP) window.open('https://wa.me/' + waP.value.replace(/\D/g,'') + '?text=' + encodeURIComponent(msg), '_blank');
+  } else if (channel === 'email'){
+    const email = c.emails[0];
+    if (email) window.location.href = 'mailto:' + email.value + '?subject=' + encodeURIComponent('Согласие — закрытая база кандидатов') + '&body=' + encodeURIComponent(msg);
+  } else if (channel === 'copy'){
+    try { await navigator.clipboard.writeText(msg); alert('✅ Текст скопирован — вставьте в Telegram или любой мессенджер'); }
+    catch(e){ const ta=document.createElement('textarea'); ta.value=msg; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert('✅ Текст скопирован'); }
+  }
+  await _consentSetStatus(c, 'requested', channel);
+  openConsentModal(candidateId);
+}
+
+async function consentMark(candidateId, status){
+  const c = candidates.find(x => x.id === candidateId); if (!c) return;
+  if (status === 'withdrawn' && !confirm('Отметить, что кандидат отозвал согласие?\n\nЕсли его тизер опубликован — не забудьте снять его с базы.')) return;
+  await _consentSetStatus(c, status);
+  closeModal();
+  openCandidateDetail(candidateId);
 }
 
 </script>
