@@ -1208,7 +1208,7 @@ function avatarHTML(name,size=44,photo=null){
   const fs=Math.round(size*0.33);return '<div class="avatar" style="width:'+size+'px;height:'+size+'px;background:'+nameColor(name)+';font-size:'+fs+'px">'+initials(name)+'</div>';
 }
 function fmtDate(s){if(!s)return '—';const d=new Date(s+'T00:00:00');return `${d.getDate()} ${MONTHS_GEN[d.getMonth()]}`}
-function fmtSalary(mn,mx){if(!mn&&!mx)return '—';const f=n=>n?(Math.round(n/1000)+'к'):'';if(mn&&mx)return `${f(mn)}–${f(mx)} ₽`;return `${f(mn||mx)} ₽`}
+function fmtSalary(mn,mx){if(!mn&&!mx)return '—';const f=n=>n?Math.round(n/1000):'';if(mn&&mx)return `${f(mn)}–${f(mx)} т. р.`;return `${f(mn||mx)} т. р.`}
 function starsStr(n){return '★'.repeat(n||0)+'☆'.repeat(5-(n||0))}
 function todayStr(){return new Date().toISOString().slice(0,10)}
 function isOverdue(d){return d && d<todayStr()}
@@ -4394,13 +4394,12 @@ function openTeaserModal(candidateId) {
   }
   if (c.consentStatus !== 'granted') {
     html += `<div style="background:#fdf3f2;border:1px solid #f0c0c0;border-radius:8px;padding:10px 13px;margin-bottom:14px;font-size:12.5px;color:#a93226">
-      ⚠️ Согласие кандидата не отмечено как «получено». Публиковать тизер можно только при наличии согласия (152-ФЗ).
+      ⚠️ Согласие кандидата не отмечено как «получено». Публиковать карточку можно только при наличии согласия (152-ФЗ).
       <button onclick="closeModal();openConsentModal('${c.id}')" style="margin-top:7px;padding:6px 11px;border:none;border-radius:7px;background:#a93226;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer">Перейти к согласию</button>
     </div>`;
   }
-  html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px">
-    <div>${fieldRow('Код тизера', 'pt-code', d.code)}</div>
-    <div>${selectRow('Рейтинг', 'pt-rating', String(d.rating), [['1','★☆☆☆☆'],['2','★★☆☆☆'],['3','★★★☆☆'],['4','★★★★☆'],['5','★★★★★']])}</div>
+  html += `<div>
+    <div>${fieldRow('Код карточки', 'pt-code', d.code)}</div>
   </div>
   ${fieldRow('Роль (анонимно)', 'pt-role', d.role)}
   ${fieldRow('Зарплатная вилка', 'pt-salary', d.salary)}
@@ -4427,7 +4426,7 @@ function openTeaserModal(candidateId) {
     code:      document.getElementById('pt-code').value.trim(),
     dir:       d.dir,
     role:      document.getElementById('pt-role').value.trim(),
-    rating:    parseInt(document.getElementById('pt-rating').value),
+    rating:    d.rating || 3, // kept in data for backward compat; not shown on portal
     verified:  true,
     skills:    document.getElementById('pt-skills').value.split(',').map(s=>s.trim()).filter(Boolean),
     exp:       document.getElementById('pt-exp').value.trim(),
@@ -4454,7 +4453,7 @@ function openTeaserModal(candidateId) {
     { text: alreadyPublished ? '🔄 Обновить' : '📤 Опубликовать', cls: 'primary', action: async function() {
       const teaser = collectTeaser();
       if (!teaser.code || !teaser.role) { alert('Укажите код и роль'); return; }
-      if (c.consentStatus !== 'granted' && !confirm('⚠️ Согласие кандидата не отмечено как «получено».\n\nПубликуйте тизер только при наличии согласия (152-ФЗ).\n\nПодтверждаете, что согласие есть, и публикуете?')) return;
+      if (c.consentStatus !== 'granted' && !confirm('⚠️ Согласие кандидата не отмечено как «получено».\n\nПубликуйте карточку только при наличии согласия (152-ФЗ).\n\nПодтверждаете, что согласие есть, и публикуете?')) return;
       const cfg = getPortalConfig();
       try {
         const r = await fetch(cfg.url + '/api/admin/teasers', {
@@ -4470,13 +4469,12 @@ function openTeaserModal(candidateId) {
         candidates = candidates.map(x => x.id === c.id ? c : x);
         closeModal();
         openCandidateDetail(c.id);
-        alert('✅ Тизер ' + teaser.code + ' опубликован в базе!');
+        alert('✅ Карточка ' + teaser.code + ' опубликована в базе!');
       } catch(e) { alert('❌ Ошибка: ' + e.message); }
     }},
     ...(alreadyPublished ? [
       { text: '📋 Telegram-пост', action: function() {
         const t = collectTeaser();
-        const stars = '★'.repeat(t.rating||3) + '☆'.repeat(5-(t.rating||3));
         const portalUrl = (getPortalConfig().url || 'https://select.hr-elenich.ru').replace(/\/+$/,'');
         const post = '🆕 Новый кандидат в базе\n\n' +
           t.code + ' · ' + t.role + '\n\n' +
@@ -4496,7 +4494,7 @@ function openTeaserModal(candidateId) {
         alert(copied ? '✅ Пост скопирован — вставьте в Telegram-канал' : '⚠️ Скопируйте текст вручную:\n\n' + post);
       }},
       { text: '🗑 Снять с базы', cls: 'danger', action: async function() {
-        if (!confirm('Снять тизер ' + c.teaserCode + ' с базы?')) return;
+        if (!confirm('Снять карточку ' + c.teaserCode + ' с базы?')) return;
         const cfg = getPortalConfig();
         try {
           const r = await fetch(cfg.url + '/api/admin/teasers/' + encodeURIComponent(c.teaserCode), {
@@ -4508,14 +4506,14 @@ function openTeaserModal(candidateId) {
           await db.candidates.put(c);
           candidates = candidates.map(x => x.id === c.id ? c : x);
           closeModal(); openCandidateDetail(c.id);
-          alert('Тизер снят с базы.');
+          alert('Карточка снята с базы.');
         } catch(e) { alert('❌ ' + e.message); }
       }}
     ] : []),
     { text: 'Отмена', action: function() { closeModal(); } }
   ];
 
-  showModal((alreadyPublished ? '✏️ Редактировать тизер' : '📤 Опубликовать в базу') + ' — ' + (c.name||'кандидат'), html, btns);
+  showModal((alreadyPublished ? '✏️ Редактировать карточку' : '📤 Опубликовать в базу') + ' — ' + (c.name||'кандидат'), html, btns);
 }
 
 // ── Portal settings (same pattern as AI settings) ──
@@ -4775,7 +4773,7 @@ async function consentSend(candidateId, channel){
 
 async function consentMark(candidateId, status){
   const c = candidates.find(x => x.id === candidateId); if (!c) return;
-  if (status === 'withdrawn' && !confirm('Отметить, что кандидат отозвал согласие?\n\nЕсли его тизер опубликован — не забудьте снять его с базы.')) return;
+  if (status === 'withdrawn' && !confirm('Отметить, что кандидат отозвал согласие?\n\nЕсли его карточка опубликована — не забудьте снять её с базы.')) return;
   await _consentSetStatus(c, status);
   closeModal();
   openCandidateDetail(candidateId);
