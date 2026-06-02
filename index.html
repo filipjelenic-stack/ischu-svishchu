@@ -3658,27 +3658,32 @@ function showAISettings() {
 function showModal(title, content, buttons) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)';
+  // -webkit-backdrop-filter required for iOS Safari; without it a compositor bug swallows child touch events
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)';
 
   let btnsHTML = '';
   buttons.forEach(function(b, i) {
-    const cls = b.cls === 'primary' ? 'background:#1e7de8;color:white' : 'background:#f0f0f0;color:#333';
-    btnsHTML += '<button data-idx="' + i + '" style="padding:11px 16px;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;width:100%;' + cls + '">' + b.text + '</button>';
+    var bg = b.cls === 'primary' ? '#1e7de8' : b.cls === 'danger' ? '#c0392b' : '#f0f0f0';
+    var fg = (b.cls === 'primary' || b.cls === 'danger') ? 'white' : '#333';
+    btnsHTML += '<button data-idx="' + i + '" style="padding:12px 16px;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;width:100%;background:' + bg + ';color:' + fg + ';-webkit-tap-highlight-color:transparent;touch-action:manipulation">' + b.text + '</button>';
   });
 
-  // Stack buttons vertically — fits 3+ buttons on iPhone (375px) without clipping
-  overlay.innerHTML = '<div style="background:white;border-radius:16px;padding:20px;max-width:380px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2)">'
+  // overflow-y:scroll + -webkit-overflow-scrolling:touch required for iOS scroll inside fixed overlay
+  overlay.innerHTML = '<div style="background:white;border-radius:16px;padding:20px;max-width:400px;width:100%;max-height:82vh;overflow-y:scroll;-webkit-overflow-scrolling:touch;box-shadow:0 20px 60px rgba(0,0,0,.3)">'
     + '<div style="font-size:17px;font-weight:700;margin-bottom:12px">' + title + '</div>'
     + '<div>' + content + '</div>'
     + '<div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">' + btnsHTML + '</div></div>';
-  
-  overlay.querySelectorAll('button').forEach(function(btn) {
-    btn.onclick = function() {
-      const idx = parseInt(btn.getAttribute('data-idx'));
+
+  // IMPORTANT: only attach to footer buttons (data-idx).
+  // querySelectorAll('button') would also select content buttons (e.g. consent send, B2B actions)
+  // and override their inline onclick — making them dead. Target only [data-idx] buttons.
+  overlay.querySelectorAll('button[data-idx]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var idx = parseInt(btn.getAttribute('data-idx'), 10);
       if (buttons[idx] && buttons[idx].action) buttons[idx].action();
-    };
+    });
   });
-  
+
   document.body.appendChild(overlay);
 }
 
