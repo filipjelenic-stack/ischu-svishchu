@@ -4344,6 +4344,7 @@ function buildTeaserDraft(c) {
     role:      c.position  || c.currentRole || '',
     rating:    c.rating    || 3,
     verified:  true,
+    grade:     ['interview','offer','hired'].includes(c.status) ? 'interviewed' : 'cv_verified',
     skills:    [],
     exp:       '',
     salary,
@@ -4413,6 +4414,7 @@ function openTeaserModal(candidateId) {
     <div>${selectRow('Формат', 'pt-format', d.format, [['Офис','Офис'],['Гибрид / удалёнка','Гибрид / удалёнка'],['Удалённо','Удалённо']])}</div>
     <div>${selectRow('Статус', 'pt-avail', d.avail, [['active','🟢 Открыт'],['passive','🔵 Пассивен']])}</div>
   </div>
+  ${selectRow('Верификация Юлии', 'pt-grade', d.grade, [['interviewed','✦ Личное интервью Юлии'],['cv_verified','✔ Резюме проверено Юлией']])}
   ${fieldRow('Текст статуса', 'pt-availText', d.availText)}
   ${fieldRow('Краткое резюме (анонимно)', 'pt-summary', d.summary, 'textarea')}
   ${fieldRow('Сильная сторона 1', 'pt-s1', d.strengths[0])}
@@ -4428,6 +4430,7 @@ function openTeaserModal(candidateId) {
     role:      document.getElementById('pt-role').value.trim(),
     rating:    d.rating || 3, // kept in data for backward compat; not shown on portal
     verified:  true,
+    grade:     document.getElementById('pt-grade').value,
     skills:    document.getElementById('pt-skills').value.split(',').map(s=>s.trim()).filter(Boolean),
     exp:       document.getElementById('pt-exp').value.trim(),
     salary:    document.getElementById('pt-salary').value.trim(),
