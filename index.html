@@ -4157,6 +4157,7 @@ async function aiFileBatchImport() {
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Подготовка…'; }
 
   let added=0, merged=0, skipped=0, errors=0;
+  let firstError = null;
   const mergeOpts = {overwriteSalary:true, replaceContacts:true};
 
   for (let i=0; i<files.length; i++) {
@@ -4172,7 +4173,7 @@ async function aiFileBatchImport() {
       try { fileDataUrl = await _readDU(file); } catch(e){}
 
       if (kind==='image') {
-        try { extractedPhoto = await _resizePhoto(fileDataUrl, 300); } catch(e){}
+        try { extractedPhoto = await _resizePhoto(fileDataUrl, 800); } catch(e){}
       } else if (kind==='pdf') {
         try { const r=await _extractFromPDF(file); extractedText=r.text; extractedPhoto=r.photo; } catch(e){}
       } else if (kind==='docx') {
@@ -4200,14 +4201,20 @@ async function aiFileBatchImport() {
         try { extractedText=await _readTx(file); } catch(e){}
       }
 
-      // Call AI
+      // Build payload — never send raw PDF/DOCx binary (too large, AI can't use it)
+      // Images: send resized version; PDFs/DOCx: send extracted text + embedded photo if any
       const payload = {filename:file.name, filetype:file.type, kind:kind};
       if (extractedText) payload.text = extractedText.slice(0, 60000);
-      if (fileDataUrl)   payload.filedata = fileDataUrl;
+      if (kind==='image' && extractedPhoto) {
+        payload.filedata = extractedPhoto; // already resized to 800px
+      } else if (!extractedText && extractedPhoto) {
+        payload.filedata = extractedPhoto; // scanned PDF: no text, but extracted image
+      }
 
       const result = await callAI('file_import', payload);
-      const contacts = Array.isArray(result) ? result : (result && result.contacts ? result.contacts : [result]);
-      if (!contacts.length || (contacts.length===1 && !contacts[0] && !contacts[0]?.name)) { errors++; continue; }
+      const contacts = Array.isArray(result) ? result
+        : (result && result.contacts ? result.contacts : (result && result.name ? [result] : []));
+      if (!contacts.length || (contacts.length===1 && !contacts[0]?.name)) { skipped++; continue; }
 
       for (let ci=0; ci<contacts.length; ci++) {
         const c = contacts[ci];
@@ -4283,6 +4290,7 @@ async function aiFileBatchImport() {
 
     } catch(e) {
       console.warn('batch import: failed', file.name, e);
+      if (!firstError) firstError = file.name + ': ' + (e && e.message ? e.message : String(e));
       errors++;
     }
   }
@@ -4298,12 +4306,12 @@ async function aiFileBatchImport() {
   if (btn) { btn.textContent='🤖 AI Анализ и Импорт'; btn.disabled=false; btn.style.display='none'; }
 
   closeSheet();
-  showToast(
-    'Импорт: +'+added+' новых, '+merged+' обновлено' +
+  const toastType = errors && !added && !merged ? 'error' : 'success';
+  const toastMsg = 'Импорт: +'+added+' новых, '+merged+' обновлено' +
     (skipped ? ', '+skipped+' пропущено' : '') +
-    (errors  ? ', '+errors+' ошибок'    : ''),
-    'success', 7000
-  );
+    (errors  ? ', '+errors+' ошибок'    : '') +
+    (firstError ? '\n⚠️ '+firstError.slice(0,80) : '');
+  showToast(toastMsg, toastType, 10000);
 }
 
 // ─── CANDIDATE PHOTO ─────────────────────────
