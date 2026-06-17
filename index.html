@@ -3030,7 +3030,7 @@ async function downloadCandFile(candId,fileId){
     let blob = null;
     try { const rec = await db.files.get(fileId); if (rec && rec.blob) blob = rec.blob; } catch(e){}
     if (!blob && f.data) blob = _dataUrlToBlob(f.data);
-    if (!blob) { alert('Невозможно прочитать файл'); return; }
+    if (!blob) { alert('Невозможно прочитать файл.\n\nФайлы хранятся на том устройстве, где они были прикреплены. Чтобы перенести их — откройте CRM на том устройстве, скачайте «Резервная копия (полная)» и восстановите её здесь.'); return; }
     const fileName = f.name || 'file';
     const mime = blob.type || f.type || 'application/octet-stream';
 
