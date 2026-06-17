@@ -4173,9 +4173,13 @@ async function aiFileBatchImport() {
       try { fileDataUrl = await _readDU(file); } catch(e){}
 
       if (kind==='image') {
+        // Resize before sending — reduces payload from MB to ~50KB
         try { extractedPhoto = await _resizePhoto(fileDataUrl, 800); } catch(e){}
       } else if (kind==='pdf') {
-        try { const r=await _extractFromPDF(file); extractedText=r.text; extractedPhoto=r.photo; } catch(e){}
+        // Skip PDF.js extraction entirely in batch mode — its web workers fire errors
+        // asynchronously that escape try/catch and kill the loop. Send raw data for
+        // small files (≤800KB before base64); AI backend handles the extraction.
+        // Large PDFs skip binary; AI gets filename only and counts as skipped.
       } else if (kind==='docx') {
         try { const r=await _extractFromDOCX(file); extractedText=r.text; extractedPhoto=r.photo; } catch(e){}
       } else if (kind==='xlsx') {
@@ -4201,14 +4205,15 @@ async function aiFileBatchImport() {
         try { extractedText=await _readTx(file); } catch(e){}
       }
 
-      // Build payload — never send raw PDF/DOCx binary (too large, AI can't use it)
-      // Images: send resized version; PDFs/DOCx: send extracted text + embedded photo if any
+      // Build payload
       const payload = {filename:file.name, filetype:file.type, kind:kind};
       if (extractedText) payload.text = extractedText.slice(0, 60000);
       if (kind==='image' && extractedPhoto) {
-        payload.filedata = extractedPhoto; // already resized to 800px
-      } else if (!extractedText && extractedPhoto) {
-        payload.filedata = extractedPhoto; // scanned PDF: no text, but extracted image
+        payload.filedata = extractedPhoto; // resized to 800px
+      } else if (kind==='pdf' && fileDataUrl && file.size <= 800*1024) {
+        payload.filedata = fileDataUrl; // small PDF: send raw for AI to extract text
+      } else if (kind==='docx' && !extractedText && fileDataUrl && file.size <= 500*1024) {
+        payload.filedata = fileDataUrl; // DOCx extraction failed: send raw as fallback
       }
 
       const result = await callAI('file_import', payload);
