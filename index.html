@@ -1977,17 +1977,7 @@ ${list.length?list.map(t=>{
   ${isLnk?`<a class="task-action-btn" href="${url}">${actionIcon(t.actionType)}</a>`:`<div class="task-action-btn" onclick="openTaskDetail('${t.id}')">${actionIcon(t.actionType)}</div>`}
 </div>`;
 }).join(''):'<div class="empty-state"><div class="es-emoji">✅</div><p>Задач нет</p></div>'}
-<div id="imp-file" style="display:none">
-  <label for="ai-file-input" style="display:block;border:2px dashed rgba(30,125,232,.3);border-radius:12px;padding:24px;text-align:center;margin-bottom:12px;background:rgba(30,125,232,.02);cursor:pointer">
-    <div style="font-size:36px;margin-bottom:8px">📎</div>
-    <div style="font-size:14px;font-weight:600;color:#1e7de8;margin-bottom:4px">Загрузите любой файл</div>
-    <div style="font-size:11px;color:#999;margin-bottom:12px">PDF, Word, Excel, фото, скриншот — AI извлечёт контакты</div>
-    <input type="file" id="ai-file-input" accept="image/*,application/pdf,.pdf,application/msword,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/vnd.ms-excel,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx,.xlsm,.xlsb,text/plain,.txt,text/csv,.csv,text/vcard,.vcf" onchange="handleAIFileSelect(this)" style="position:absolute;opacity:0;width:1px;height:1px">
-    <span style="display:inline-block;padding:12px 28px;background:#1e7de8;color:white;border:none;border-radius:10px;font-size:15px;font-weight:600;-webkit-tap-highlight-color:transparent">📎 Выбрать файл</span>
-  </label>
-  <div id="ai-file-name" style="display:none;font-size:12px;color:#666;margin-bottom:8px;padding:8px;background:#f5f5f5;border-radius:8px"></div>
-  <button id="ai-file-import-btn" onclick="aiFileImport()" style="display:none;width:100%;padding:12px;background:linear-gradient(135deg,#1e7de8,#6c3cf0);color:white;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer">🤖 AI Анализ и Импорт</button>
-</div>`;
+`;
 }
 
 function toggleTask(id){
@@ -3492,8 +3482,13 @@ async function callAI(action, data) {
     },
     body: JSON.stringify({ action, data })
   });
-  const json = await resp.json();
-  if (!resp.ok || json.error) throw new Error(json.error || 'Ошибка AI');
+  // Read as text first so a non-JSON error body (e.g. a 500 HTML page) yields a clear
+  // message instead of Safari's cryptic "string did not match the expected pattern".
+  const bodyText = await resp.text();
+  let json;
+  try { json = bodyText ? JSON.parse(bodyText) : {}; }
+  catch(e){ throw new Error('Сервер AI вернул ошибку (' + resp.status + '). ' + (bodyText||'').slice(0,120)); }
+  if (!resp.ok || json.error) throw new Error(json.error || ('Ошибка AI (' + resp.status + ')'));
   return json.result;
 }
 
@@ -4166,24 +4161,24 @@ async function aiFileBatchImport() {
     await new Promise(function(r){setTimeout(r,0);}); // yield to UI
 
     try {
-      const kind = _detectKind(file);
+      // CRITICAL: _detectKind is async (reads magic bytes) — must await, else kind is a
+      // Promise that serializes to {} and crashes the server (data.kind.toLowerCase()).
+      const kind = await _detectKind(file);
       let extractedText = null, extractedPhoto = null;
       let fileDataUrl = null;
 
       try { fileDataUrl = await _readDU(file); } catch(e){}
 
+      // Mirror the proven single-file extraction (handleAIFileSelect): extract text
+      // client-side where we can; otherwise the raw file is sent and the server extracts.
       if (kind==='image') {
-        // Resize before sending — reduces payload from MB to ~50KB
-        try { extractedPhoto = await _resizePhoto(fileDataUrl, 800); } catch(e){}
+        try { extractedPhoto = await _resizePhoto(fileDataUrl, 300); } catch(e){}
       } else if (kind==='pdf') {
-        // Skip PDF.js extraction entirely in batch mode — its web workers fire errors
-        // asynchronously that escape try/catch and kill the loop. Send raw data for
-        // small files (≤800KB before base64); AI backend handles the extraction.
-        // Large PDFs skip binary; AI gets filename only and counts as skipped.
+        try { const r=await _extractFromPDF(file); extractedText=r.text; extractedPhoto=r.photo; } catch(e){ console.warn('pdf extract failed', file.name, e); }
       } else if (kind==='docx') {
-        try { const r=await _extractFromDOCX(file); extractedText=r.text; extractedPhoto=r.photo; } catch(e){}
+        try { const r=await _extractFromDOCX(file); extractedText=r.text; extractedPhoto=r.photo; } catch(e){ console.warn('docx extract failed', file.name, e); }
       } else if (kind==='xlsx') {
-        // Try tabular fast path first
+        // Try tabular fast path first (free, offline, scales to thousands of rows)
         let handled = false;
         try {
           const t=await _parseTabularFile(file);
@@ -4198,22 +4193,30 @@ async function aiFileBatchImport() {
               handled=true;
             }
           }
-        } catch(e){}
+        } catch(e){ console.warn('structural parse failed', file.name, e); }
         if (handled) continue;
         try { const r=await _extractFromXLSX(file); extractedText=r.text; } catch(e){}
       } else if (kind==='text') {
         try { extractedText=await _readTx(file); } catch(e){}
       }
 
-      // Build payload
+      // Build payload (mirror proven aiFileImport). Prefer client-extracted text; only
+      // ship the raw file when there's no text, and only if it fits the serverless body
+      // limit (~4.5MB → ~3MB raw before base64 expansion).
       const payload = {filename:file.name, filetype:file.type, kind:kind};
-      if (extractedText) payload.text = extractedText.slice(0, 60000);
-      if (kind==='image' && extractedPhoto) {
-        payload.filedata = extractedPhoto; // resized to 800px
-      } else if (kind==='pdf' && fileDataUrl && file.size <= 800*1024) {
-        payload.filedata = fileDataUrl; // small PDF: send raw for AI to extract text
-      } else if (kind==='docx' && !extractedText && fileDataUrl && file.size <= 500*1024) {
-        payload.filedata = fileDataUrl; // DOCx extraction failed: send raw as fallback
+      if (extractedText && extractedText.trim()) payload.text = extractedText.slice(0, 60000);
+      const rawTooBig = !fileDataUrl || fileDataUrl.length > 3*1024*1024;
+      if (!payload.text) {
+        if (kind==='image' && extractedPhoto) {
+          payload.filedata = extractedPhoto;        // resized photo for AI vision
+        } else if (!rawTooBig) {
+          payload.filedata = fileDataUrl;           // doc/scanned-pdf/etc → server extracts
+        }
+      }
+      // Nothing to send → AI can't do anything; record as error with a clear reason.
+      if (!payload.text && !payload.filedata) {
+        if (!firstError) firstError = file.name + ': ' + (rawTooBig ? 'файл слишком большой' : 'не удалось прочитать');
+        errors++; continue;
       }
 
       const result = await callAI('file_import', payload);
@@ -4242,6 +4245,9 @@ async function aiFileBatchImport() {
             type: 'note'
           }]
         };
+        // Normalize to full schema (consent/portal/direction fields) — same as every
+        // other import path, so the new card renders and behaves identically.
+        migrateCandidate(newCand);
 
         // Determine dedup action
         const dup = findDuplicate(newCand);

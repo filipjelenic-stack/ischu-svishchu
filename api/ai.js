@@ -79,11 +79,13 @@ module.exports = async (req, res) => {
       break;
 
     case 'file_import': {
-      const fileName = data.filename || data.fileName || 'file';
-      const fileType = (data.filetype || data.mimeType || '').toLowerCase();
-      const kindHint = (data.kind || '').toLowerCase();
+      const fileName = String(data.filename || data.fileName || 'file');
+      // String() coercion is defensive: a malformed client payload (e.g. a value that
+      // isn't a plain string) must never crash the handler with a TypeError.
+      const fileType = String(data.filetype || data.mimeType || '').toLowerCase();
+      const kindHint = String(data.kind || '').toLowerCase();
       const preText = typeof data.text === 'string' ? data.text : '';
-      let rawData = data.filedata || data.fileContent || '';
+      let rawData = (typeof data.filedata === 'string' ? data.filedata : '') || (typeof data.fileContent === 'string' ? data.fileContent : '');
       // Strip data URL prefix: "data:application/pdf;base64,XXXX"
       let detectedMime = fileType;
       let base64 = rawData;
