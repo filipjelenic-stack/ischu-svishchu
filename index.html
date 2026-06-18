@@ -4725,7 +4725,8 @@ function openTeaserModal(candidateId) {
     ].filter(Boolean),
     note:      document.getElementById('pt-note').value.trim(),
     realName:  c.name || '',
-    publishedAt: Math.floor(Date.now() / 1000)
+    publishedAt: Math.floor(Date.now() / 1000),
+    consent:   c.consentStatus === 'granted'
   });
 
   const btns = [
