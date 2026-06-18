@@ -4723,7 +4723,9 @@ function openTeaserModal(candidateId) {
       document.getElementById('pt-s2').value.trim(),
       document.getElementById('pt-s3').value.trim()
     ].filter(Boolean),
-    note:      document.getElementById('pt-note').value.trim()
+    note:      document.getElementById('pt-note').value.trim(),
+    realName:  c.name || '',
+    publishedAt: Math.floor(Date.now() / 1000)
   });
 
   const btns = [
