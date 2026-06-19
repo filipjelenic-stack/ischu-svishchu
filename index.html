@@ -4637,12 +4637,24 @@ function buildTeaserDraft(c) {
   };
 }
 
+function _toggleLangChip(btn) {
+  const active = btn.dataset.active === '1';
+  btn.dataset.active = active ? '0' : '1';
+  btn.style.background = active ? '#fff' : '#2563eb';
+  btn.style.color = active ? '#555' : '#fff';
+  btn.style.borderColor = active ? '#ddd' : '#2563eb';
+}
+
 function openTeaserModal(candidateId) {
   if (!isPortalConfigured()) { showPortalSettings(); return; }
   const c = candidates.find(x => x.id === candidateId);
   if (!c) return;
   const d = buildTeaserDraft(c);
   const alreadyPublished = c.publishedToPortal && c.teaserCode;
+  const LANGS_COMMON = ['Русский','Английский','Немецкий','Французский','Испанский','Китайский'];
+  const _existingLangs = (d.lang||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const _selectedLangs = new Set(_existingLangs.filter(l=>LANGS_COMMON.includes(l)));
+  const _otherLangs = _existingLangs.filter(l=>l&&!LANGS_COMMON.includes(l)).join(', ');
 
   const fieldRow = (label, id, val, type) => `
     <div style="margin-bottom:10px">
@@ -4680,21 +4692,21 @@ function openTeaserModal(candidateId) {
   ${fieldRow('Зарплатная вилка', 'pt-salary', d.salary)}
   ${fieldRow('Регион', 'pt-region', d.region)}
   ${fieldRow('Навыки (через запятую)', 'pt-skills', (d.skills||[]).join(', '))}
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px">
-    <div>${fieldRow('Опыт', 'pt-exp', d.exp)}</div>
-    <div>${fieldRow('Язык', 'pt-lang', d.lang)}</div>
+  <div style="margin-bottom:10px">
+    <label style="font-size:11px;color:#888;font-weight:600;display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em">Языки</label>
+    <div id="pt-lang-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:7px">
+      ${LANGS_COMMON.map(l=>{const s=_selectedLangs.has(l);return `<button type="button" data-lang="${l}" data-active="${s?'1':'0'}" onclick="_toggleLangChip(this)" style="padding:5px 11px;border-radius:20px;border:1.5px solid ${s?'#2563eb':'#ddd'};background:${s?'#2563eb':'#fff'};color:${s?'#fff':'#555'};font-size:12.5px;cursor:pointer">${l}</button>`;}).join('')}
+    </div>
+    <input id="pt-lang-other" type="text" placeholder="Другой язык..." value="${_otherLangs.replace(/"/g,'&quot;')}" style="width:100%;padding:8px 11px;border:1.5px solid #ddd;border-radius:10px;font-size:13px;box-sizing:border-box">
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px">
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 10px">
     <div>${selectRow('Формат', 'pt-format', d.format, [['Офис','Офис'],['Гибрид / удалёнка','Гибрид / удалёнка'],['Удалённо','Удалённо']])}</div>
+    <div>${selectRow('Релокация', 'pt-reloc', d.reloc, [['Не указано','Не указано'],['Да','Да'],['Нет','Нет']])}</div>
     <div>${selectRow('Статус', 'pt-avail', d.avail, [['active','🟢 Открыт'],['passive','🔵 Пассивен']])}</div>
   </div>
   ${selectRow('Верификация Юлии', 'pt-grade', d.grade, [['interviewed','✦ Личное интервью Юлии'],['cv_verified','✔ Резюме проверено Юлией']])}
   ${fieldRow('Текст статуса', 'pt-availText', d.availText)}
   ${fieldRow('Краткое резюме (анонимно)', 'pt-summary', d.summary, 'textarea')}
-  ${fieldRow('Сильная сторона 1', 'pt-s1', d.strengths[0])}
-  ${fieldRow('Сильная сторона 2', 'pt-s2', d.strengths[1])}
-  ${fieldRow('Сильная сторона 3', 'pt-s3', d.strengths[2])}
-  ${fieldRow('Заметка Юлии (не раскрывается)', 'pt-note', d.note, 'textarea')}
   <div style="font-size:11px;color:#aaa;margin-top:4px">Имя, контакты, фото и работодатель НЕ передаются. Только поля выше.</div>
   </div>`;
 
@@ -4706,24 +4718,20 @@ function openTeaserModal(candidateId) {
     verified:  true,
     grade:     document.getElementById('pt-grade').value,
     skills:    document.getElementById('pt-skills').value.split(',').map(s=>s.trim()).filter(Boolean),
-    exp:       document.getElementById('pt-exp').value.trim(),
+    exp:       '',
     salary:    document.getElementById('pt-salary').value.trim(),
     salaryMax: c.salaryMax || 0,
     region:    document.getElementById('pt-region').value.trim(),
     format:    document.getElementById('pt-format').value,
-    reloc:     d.reloc,
-    lang:      document.getElementById('pt-lang').value.trim(),
+    reloc:     document.getElementById('pt-reloc').value,
+    lang:      [...document.querySelectorAll('#pt-lang-chips [data-active="1"]')].map(b=>b.dataset.lang).concat((document.getElementById('pt-lang-other').value||'').split(',').map(s=>s.trim()).filter(Boolean)).join(', '),
     edu:       d.edu,
     avail:     document.getElementById('pt-avail').value,
     availText: document.getElementById('pt-availText').value.trim(),
     addedAt:   d.addedAt,
     summary:   document.getElementById('pt-summary').value.trim(),
-    strengths: [
-      document.getElementById('pt-s1').value.trim(),
-      document.getElementById('pt-s2').value.trim(),
-      document.getElementById('pt-s3').value.trim()
-    ].filter(Boolean),
-    note:      document.getElementById('pt-note').value.trim(),
+    strengths: [],
+    note:      '',
     realName:  c.name || '',
     publishedAt: Math.floor(Date.now() / 1000),
     consent:   c.consentStatus === 'granted'
