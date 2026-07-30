@@ -1851,6 +1851,17 @@ function saveVacForm(id){
 // ── SCREEN 3: CALENDAR ──
 let calY=new Date().getFullYear(),calM=new Date().getMonth(),calSel=todayStr();
 
+// Точечная запись одного кандидата в IndexedDB. Снимает те же служебные поля,
+// что и saveData: кэши поиска не должны попадать на диск (замороженный haystack
+// уже однажды ломал поиск), inline base64 файлов живёт только в db.files.
+async function putCandidate(c){
+  const {_searchHay,_posHay,...copy}=c;
+  if(Array.isArray(copy.files)&&copy.files.some(f=>f&&f.data)){
+    copy.files=copy.files.map(f=>{ const {data,...rest}=f||{}; return rest; });
+  }
+  await db.candidates.put(copy);
+}
+
 // Единственная точка чтения событий календаря. Битый JSON в localStorage
 // (обрыв записи при переполнении квоты и т.п.) раньше навсегда ломал вкладку
 // «Календарь» — JSON.parse кидал исключение при каждом открытии.
@@ -4804,7 +4815,7 @@ function openTeaserModal(candidateId) {
         if (!r.ok || !j.ok) throw new Error(j.error || ('Ошибка сервера (' + r.status + ')'));
         c.teaserCode = teaser.code;
         c.publishedToPortal = true;
-        await db.candidates.put(c);
+        await putCandidate(c);
         candidates = candidates.map(x => x.id === c.id ? c : x);
         closeModal();
         openCandidateDetail(c.id);
@@ -4842,7 +4853,7 @@ function openTeaserModal(candidateId) {
           const j = await _respJson(r);
           if (!r.ok || !j.ok) throw new Error(j.error || ('Ошибка (' + r.status + ')'));
           c.publishedToPortal = false; c.teaserCode = '';
-          await db.candidates.put(c);
+          await putCandidate(c);
           candidates = candidates.map(x => x.id === c.id ? c : x);
           closeModal(); openCandidateDetail(c.id);
           alert('Карточка снята с базы.');
@@ -5035,7 +5046,7 @@ async function _consentSetStatus(c, status, channel){
   const lbl = {requested:'Запрошено согласие', granted:'Согласие получено', declined:'Кандидат отказал в согласии', withdrawn:'Согласие отозвано'}[status] || status;
   c.activityLog = c.activityLog || [];
   c.activityLog.push({ id: genId(), date: todayStr(), text: '📋 ' + lbl + (channel && channel!=='copy' ? ' ('+channel+')' : ''), type: 'consent' });
-  await db.candidates.put(c);
+  await putCandidate(c);
   candidates = candidates.map(x => x.id === c.id ? c : x);
 }
 
