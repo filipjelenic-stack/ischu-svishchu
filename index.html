@@ -3614,10 +3614,16 @@ async function aiAssessCandidate(candId) {
   
   try {
     const result = await callAI('assess_candidate', {
-      name: cand.name,
-      phone: cand.phone,
-      email: cand.email,
-      notes: cand.notes
+      candidate: {
+        name: cand.name,
+        position: cand.position || cand.currentRole || '',
+        company: cand.company || cand.currentCompany || '',
+        citizenship: cand.citizenship || '',
+        salaryMin: cand.salaryMin || 0,
+        salaryMax: cand.salaryMax || 0,
+        status: cand.status,
+        notes: cand.notes || ''
+      }
     });
     
     let html = '';
