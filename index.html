@@ -771,6 +771,13 @@ function findDuplicate(newCand, excludeId){
 // Non-destructive: never overwrites a non-empty scalar field; always appends to lists.
 function mergeCandidate(existing, incoming, opts){
   opts = opts || {};
+  // Name update (e.g. surname changed after marriage): only when the duplicate was
+  // matched by phone/email — if names matched, _norm() makes them equal and this skips.
+  if(opts.updateName && incoming.name && incoming.name.trim() && _norm(incoming.name)!==_norm(existing.name)){
+    existing.activityLog=existing.activityLog||[];
+    existing.activityLog.push({id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Имя обновлено: «'+existing.name+'» → «'+incoming.name.trim()+'»',type:'note'});
+    existing.name=incoming.name.trim();
+  }
   if(incoming.position && !existing.position) existing.position=incoming.position;
   else if(incoming.position && existing.position && incoming.position!==existing.position) existing.position=existing.position+' / '+incoming.position;
   if(incoming.company && !existing.company) existing.company=incoming.company;
@@ -835,6 +842,8 @@ function mergeCandidate(existing, incoming, opts){
     ? 'Обновлено из нового резюме (зарплата и контакты обновлены)'
     : 'Объединено с данными из импорта (добавлено — без замены)';
   existing.activityLog.push({id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:logText,type:'note'});
+  // Merged fields feed the search haystack — drop the cache so results stay fresh
+  delete existing._searchHay; delete existing._posHay;
   return existing;
 }
 
@@ -1177,7 +1186,7 @@ function smartAddCandidate(newCand, opts){
     html += '</div>';
     showModal('🔍 Найден дубликат', html, [
       { text: diff.noop ? '🔄 Пересохранить (нет изменений)' : '✨ Умное обновление (дополнить)', cls:'primary', action:function(){
-        mergeCandidate(dup, newCand);
+        mergeCandidate(dup, newCand, {updateName:true});
         closeModal();
         resolve({action:'merged', candidate:dup});
       }},
@@ -1391,7 +1400,12 @@ let candSearch='',candFilters={status:'',source:'',citizenship:'',direction:'',p
 // that made search feel laggy on large lists.
 function _candSearchHay(c){
   if(c && c._searchHay) return c._searchHay;
-  const s=[c.name,c.position,c.company,c.currentCompany,c.currentRole,c.citizenship,c.notes,DIRECTIONS[c.direction]||'',c.direction,c.teaserCode||''].map(x=>(x||'').toLowerCase()).join(' ');
+  const s=[c.name,c.position,c.company,c.currentCompany,c.currentRole,c.citizenship,c.notes,DIRECTIONS[c.direction]||'',c.direction,c.teaserCode||'',
+    ...(c.phones||[]).map(p=>(p&&p.value)||''),
+    ...(c.phones||[]).map(p=>((p&&p.value)||'').replace(/\D/g,'')),
+    ...(c.emails||[]).map(e=>(e&&e.value)||''),
+    ...(c.socials||[]).map(x=>(x&&x.value)||'')
+  ].map(x=>(x||'').toLowerCase()).join(' ');
   if(c) c._searchHay=s;
   return s;
 }
@@ -1424,6 +1438,10 @@ function renderCandidates(){
   const selEnd=(act && typeof act.selectionEnd==='number') ? act.selectionEnd : null;
 
   const q=candSearch.toLowerCase();
+  // Phone-tolerant search: strip formatting from the query and also try the 8→+7
+  // Russian prefix swap, so "8 916 123-45-67" finds a stored "+7 (916) 123-45-67".
+  const qDigits=q.replace(/\D/g,'');
+  const qAlt=(qDigits.length===11&&qDigits[0]==='8')?'7'+qDigits.slice(1):'';
   const posQ=(candFilters.position||'').toLowerCase();
   const fStatus=candFilters.status, fSource=candFilters.source;
   const fCit=(candFilters.citizenship||'').toLowerCase(), fDir=candFilters.direction;
@@ -1435,7 +1453,13 @@ function renderCandidates(){
     if(fDir && c.direction!==fDir) return false;
     if(fCit && (c.citizenship||'').toLowerCase()!==fCit) return false;
     if(posQ && _candPosHay(c).indexOf(posQ)<0) return false;
-    if(q && _candSearchHay(c).indexOf(q)<0) return false;
+    if(q){
+      const hay=_candSearchHay(c);
+      const hit = hay.indexOf(q)>=0
+        || (qDigits.length>=4 && hay.indexOf(qDigits)>=0)
+        || (qAlt && hay.indexOf(qAlt)>=0);
+      if(!hit) return false;
+    }
     return true;
   });
   // Dynamic citizenship list — only shows values that actually exist so the dropdown
@@ -4154,7 +4178,7 @@ async function aiFileBatchImport() {
   let added=0, merged=0, skipped=0, errors=0;
   const errorFiles = [];   // {name, reason} for every file that failed — shown at the end
   const skippedFiles = []; // {name} for files where AI found no contact
-  const mergeOpts = {overwriteSalary:true, replaceContacts:true};
+  const mergeOpts = {overwriteSalary:true, replaceContacts:true, updateName:true};
 
   for (let i=0; i<files.length; i++) {
     const file = files[i];
