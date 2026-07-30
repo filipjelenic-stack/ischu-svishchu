@@ -73,4 +73,13 @@ module.exports = function (t) {
     const source = blocks.join('\n');
     t.ok(/const bodyText = await resp\.text\(\)/.test(source), 'pin: callAI reads text before JSON.parse');
   }
+
+  // ── No duplicate top-level function declarations (hoisting: last one silently wins) ──
+  {
+    const source = blocks.join('\n');
+    const names = [...source.matchAll(/^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/gm)].map(m => m[1]);
+    const seen = new Set(), dups = new Set();
+    for (const n of names) { if (seen.has(n)) dups.add(n); seen.add(n); }
+    t.eq(dups.size, 0, 'no duplicate function declarations (dups: ' + ([...dups].join(', ') || 'none') + ')');
+  }
 };

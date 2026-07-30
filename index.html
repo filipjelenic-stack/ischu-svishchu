@@ -4632,7 +4632,10 @@ function genTeaserCode() {
   return s;
 }
 
-function fmtSalary(min, max) {
+// Teaser-specific salary format («от …»/«до …», пусто вместо «—») — намеренно
+// отличается от fmtSalary из CRM-интерфейса. НЕ называть fmtSalary: одноимённая
+// функция здесь однажды перекрыла CRM-версию по hoisting и сломала вывод «—».
+function _fmtSalaryTeaser(min, max) {
   if (!min && !max) return '';
   const f = n => n >= 1000 ? Math.round(n / 1000) : String(n);
   if (min && max) return f(min) + '–' + f(max) + ' т. р.';
@@ -4642,7 +4645,7 @@ function fmtSalary(min, max) {
 
 function buildTeaserDraft(c) {
   const code  = c.teaserCode || genTeaserCode();
-  const salary = fmtSalary(c.salaryMin, c.salaryMax);
+  const salary = _fmtSalaryTeaser(c.salaryMin, c.salaryMax);
   const avail  = ['hired','rejected','archive'].includes(c.status) ? 'passive' : 'active';
   const availText = avail === 'active' ? 'Открыт к предложениям' : 'Рассматривает предложения';
   // Auto-extract first sentence of notes as summary
