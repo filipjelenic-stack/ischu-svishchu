@@ -3518,9 +3518,44 @@ async function confirmImport(){
   if(btn){ btn.disabled=false; btn.textContent='✅ Импортировать'; }
 }
 
+// ── Устойчивость хранилища ──────────────────────
+// Вся база живёт в IndexedDB на устройстве. Браузер вправе вытеснить её при нехватке
+// места. persist() просит пометить хранилище как постоянное — это best-effort: iOS
+// решает сам, и надёжнее всего именно установка на домашний экран (уже сделана).
+// Ничего не ломает: при отказе или отсутствии API просто идём дальше.
+async function _requestPersistentStorage(){
+  try{
+    if(!navigator.storage || !navigator.storage.persist) return null;
+    if(navigator.storage.persisted && await navigator.storage.persisted()) return true;
+    return await navigator.storage.persist();
+  }catch(e){ return null; }
+}
+
+// Предупреждаем ЗАРАНЕЕ, а не когда запись уже упала с QuotaExceededError:
+// на этом этапе ещё можно спокойно скачать резервную копию.
+async function _checkStorageQuota(){
+  try{
+    if(!navigator.storage || !navigator.storage.estimate) return null;
+    const {usage=0, quota=0} = await navigator.storage.estimate();
+    if(!quota) return null;
+    const pct = usage/quota;
+    if(pct >= 0.8 && typeof showToast==='function'){
+      const mb = n => Math.round(n/1048576);
+      showToast('⚠️ Память браузера заполнена на '+Math.round(pct*100)+'% ('+mb(usage)+' из '+mb(quota)+' МБ). Скачайте резервную копию и удалите лишние файлы.', 'error', 9000);
+    }
+    return {usage, quota, pct};
+  }catch(e){ return null; }
+}
+
 // ── INIT ──
 document.querySelectorAll('.tab').forEach((t,i)=>t.addEventListener('click',()=>switchTab(i)));
-(async()=>{ await loadData(); switchTab(0); })();
+(async()=>{
+  await loadData();
+  switchTab(0);
+  // После первой отрисовки — чтобы не задерживать появление интерфейса.
+  _requestPersistentStorage();
+  setTimeout(_checkStorageQuota, 1500);
+})();
 
 
 // ═══════════════════════════════════════════════
