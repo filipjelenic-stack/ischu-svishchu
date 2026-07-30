@@ -1661,14 +1661,19 @@ function setCandStatus(id,status){
   const c=candidates.find(x=>x.id===id);if(!c)return;
   c.status=status;
   addLog(c,'Статус → «'+STATUSES[status]+'»');
-  saveData();openCandidateDetail(id);
+  // putCandidate вместо saveData: точечная запись ~1 мс против ~2600 мс полной
+  // перезаписи таблицы на базе в 7500 карточек. Меняется один кандидат — пишем
+  // только его. См. tests/perf-bench.browser.js.
+  putCandidate(c);openCandidateDetail(id);
   if(currentTab<=1)renderScreen(currentTab);
 }
 function addNote(id){
   const c=candidates.find(x=>x.id===id);if(!c)return;
   const inp=document.getElementById('note-inp-'+id);
   if(!inp||!inp.value.trim())return;
-  addLog(c,inp.value.trim());saveData();openCandidateDetail(id);
+  addLog(c,inp.value.trim());
+  delete c._searchHay; // заметки входят в haystack поиска
+  putCandidate(c);openCandidateDetail(id);
 }
 function addLog(c,text,type='note'){
   if(!c.activityLog)c.activityLog=[];
@@ -1787,7 +1792,9 @@ function saveCandForm(id){
   const data={name,position:document.getElementById('cf-pos').value.trim(),company:document.getElementById('cf-co').value.trim(),citizenship:_normCitizenship(_val('cf-cit')),currentCompany:_val('cf-ccom'),currentRole:_val('cf-crole'),currentTenure:_val('cf-ctenure'),sourcedAt:_val('cf-srcdate'),status:document.getElementById('cf-st').value,vacancy:document.getElementById('cf-vac').value,source:document.getElementById('cf-src').value,rating:_stars,salaryMin:parseInt(document.getElementById('cf-s1').value)||0,salaryMax:parseInt(document.getElementById('cf-s2').value)||0,interviewDate:document.getElementById('cf-id').value,nextAction:document.getElementById('cf-nd').value,notes:document.getElementById('cf-no').value.trim(),phones,emails,socials,photo:(typeof pendingCandPhoto!=='undefined'&&pendingCandPhoto)?pendingCandPhoto:(id&&candidates.find(x=>x.id===id)?candidates.find(x=>x.id===id).photo:null)};
   // Auto-classify direction from the new position/role/company so filters work immediately.
   data.direction = _classifyDirection(data);
-  if(id){const c=candidates.find(x=>x.id===id);Object.assign(c,data);c._searchHay=null;c._posHay=null;addLog(c,'Данные обновлены');pendingCandPhoto=null;saveData();closeSheet();renderScreen(currentTab);return;}
+  // Правка существующей карточки — точечная запись (putCandidate), а не полная
+  // перезапись таблицы: на 7500 карточках это ~1 мс против ~2600 мс.
+  if(id){const c=candidates.find(x=>x.id===id);Object.assign(c,data);delete c._searchHay;delete c._posHay;addLog(c,'Данные обновлены');pendingCandPhoto=null;putCandidate(c);closeSheet();renderScreen(currentTab);return;}
   // New candidate — check for duplicates
   const newCand={id:genId(),...data,files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Кандидат добавлен',type:'note'}]};
   smartAddCandidate(newCand).then(function(res){
@@ -3071,7 +3078,7 @@ async function handleCandFiles(candId,fileList){
       if(typeof showToast==='function') showToast('Не удалось сохранить файл: '+f.name, 'error', 5000);
     }
   }
-  saveData();openCandidateDetail(candId);
+  await putCandidate(c);openCandidateDetail(candId);
 }
 function _dataUrlToBlob(dataUrl){
   // data:<mime>;base64,<payload>
@@ -3165,7 +3172,7 @@ async function deleteCandFile(candId,fileId){
   c.files=c.files.filter(f=>f.id!==fileId);
   addLog(c,'Файл удалён','file');
   try { await db.files.delete(fileId); } catch(e){}
-  saveData();openCandidateDetail(candId);
+  await putCandidate(c);openCandidateDetail(candId);
 }
 function fmtFileSize(b){if(b<1024)return b+'Б';if(b<1048576)return (b/1024).toFixed(1)+'КБ';return (b/1048576).toFixed(1)+'МБ';}
 function fileIcon(name){const ext=(name||'').split('.').pop().toLowerCase();const m={'pdf':'📕','doc':'📘','docx':'📘','xls':'📗','xlsx':'📗','jpg':'🖼','jpeg':'🖼','png':'🖼','gif':'🖼','txt':'📄','zip':'📦','rar':'📦'};return m[ext]||'📎';}
