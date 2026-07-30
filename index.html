@@ -1024,7 +1024,7 @@ function openNotifications(){
       const border = n.priority==='high' ? '#fca5a5' : n.priority==='medium' ? '#fbbf24' : '#e0eaf5';
       inner += '<div class="notif-item" data-id="'+n.id+'" style="display:flex;align-items:center;gap:10px;padding:12px;margin:6px 0;background:'+bg+';border:1px solid '+border+';border-radius:12px;cursor:pointer">';
       inner += '<div style="font-size:22px;flex-shrink:0">'+n.icon+'</div>';
-      inner += '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:#223">'+n.title+'</div><div style="font-size:11px;color:#6b87b0;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+n.subtitle+'</div></div>';
+      inner += '<div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700;color:#223">'+esc(n.title)+'</div><div style="font-size:11px;color:#6b87b0;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(n.subtitle)+'</div></div>';
       if(n.cal){
         inner += '<button class="notif-cal-btn" data-id="'+n.id+'" style="background:#1e7de8;color:white;border:none;border-radius:10px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;flex-shrink:0" title="Добавить в Календарь">📅</button>';
       }
@@ -1243,8 +1243,10 @@ function seedData(){
 function nameColor(n){let h=0;for(let c of n)h=((h<<5)-h)+c.charCodeAt(0);return AVATAR_COLORS[Math.abs(h)%AVATAR_COLORS.length]}
 function initials(n){return n.split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase()}
 function avatarHTML(name,size=44,photo=null){
-  if(photo) return '<img src="'+photo+'" style="width:'+size+'px;height:'+size+'px;border-radius:50%;object-fit:cover;flex-shrink:0" alt="">';
-  const fs=Math.round(size*0.33);return '<div class="avatar" style="width:'+size+'px;height:'+size+'px;background:'+nameColor(name)+';font-size:'+fs+'px">'+initials(name)+'</div>';
+  // Кавычки в photo экранируются: vCard принимает любую строку, прошедшую /^data:/,
+  // без экранирования `data:x" onerror="..."` вырывается из атрибута src.
+  if(photo) return '<img src="'+String(photo).replace(/"/g,'&quot;')+'" style="width:'+size+'px;height:'+size+'px;border-radius:50%;object-fit:cover;flex-shrink:0" alt="">';
+  const fs=Math.round(size*0.33);return '<div class="avatar" style="width:'+size+'px;height:'+size+'px;background:'+nameColor(name)+';font-size:'+fs+'px">'+String(initials(name)).replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</div>';
 }
 function fmtDate(s){if(!s)return '—';const d=new Date(s+'T00:00:00');return `${d.getDate()} ${MONTHS_GEN[d.getMonth()]}`}
 function fmtSalary(mn,mx){if(!mn&&!mx)return '—';const f=n=>n?Math.round(n/1000):'';if(mn&&mx)return `${f(mn)}–${f(mx)} т. р.`;return `${f(mn||mx)} т. р.`}
@@ -1515,8 +1517,8 @@ ${candView==='list'?(filtered.length?filtered.map(c=>{
   <div class="candidate-card" onclick="openCandidateDetail('${c.id}')">
     ${avatarHTML(c.name,44,c.photo)}
     <div class="card-info">
-      <div class="card-name">${c.name}${c.citizenship?` <span style="font-size:10px;color:#6b87b0;font-weight:500">· ${c.citizenship}</span>`:''}</div>
-      <div class="card-position">${subLine}</div>
+      <div class="card-name">${esc(c.name)}${c.citizenship?` <span style="font-size:10px;color:#6b87b0;font-weight:500">· ${esc(c.citizenship)}</span>`:''}</div>
+      <div class="card-position">${esc(subLine)}</div>
       <div class="card-meta">
         <span class="status-pill status-${c.status}">${STATUSES[c.status]||c.status}</span>
         ${c.publishedToPortal&&c.teaserCode?`<span style="font-size:10px;font-weight:700;background:#f0ebe0;color:#8c641e;border-radius:5px;padding:1px 6px;letter-spacing:.04em">${c.teaserCode}</span>`:''}
@@ -1548,8 +1550,8 @@ function renderKanban(list){
       <div class="kanban-col-header status-pill status-${s}">${STATUSES[s]} (${cards.length})</div>
       <div class="kanban-cards">${cards.length?cards.map(c=>`
         <div class="kanban-card" onclick="openCandidateDetail('${c.id}')">
-          <div class="kanban-card-name">${c.name}</div>
-          <div class="kanban-card-pos">${c.position}</div>
+          <div class="kanban-card-name">${esc(c.name)}</div>
+          <div class="kanban-card-pos">${esc(c.position)}</div>
           ${(c.salaryMin||c.salaryMax)?`<div style="font-size:11px;color:#6b87b0;margin-top:3px">${fmtSalary(c.salaryMin,c.salaryMax)}</div>`:''}
         </div>`).join(''):'<div style="font-size:11px;color:#c0cfe8;text-align:center;padding:8px">Пусто</div>'}
       </div>
@@ -1581,7 +1583,7 @@ function openCandidateDetail(id){
     '<div class="file-item">'+
       '<div class="file-item-icon">'+fileIcon(f.name)+'</div>'+
       '<div class="file-item-info" onclick="downloadCandFile(\''+c.id+'\',\''+f.id+'\')">'+
-        '<div class="file-item-name">'+f.name+'</div>'+
+        '<div class="file-item-name">'+esc(f.name)+'</div>'+
         '<div class="file-item-size">'+fmtFileSize(f.size||0)+' · '+(f.added||'')+'</div>'+
       '</div>'+
       '<button class="file-del-btn" onclick="event.stopPropagation();deleteCandFile(\''+c.id+'\',\''+f.id+'\')">✕</button>'+
@@ -1592,9 +1594,9 @@ function openCandidateDetail(id){
 <div class="detail-header">
   ${avatarHTML(c.name,52,c.photo)}
   <div>
-    <div class="detail-name">${c.name}${c.citizenship?` <span style="font-size:11px;color:#6b87b0;font-weight:500;margin-left:4px">🌍 ${c.citizenship}</span>`:''}</div>
-    <div class="detail-position">${c.position||'—'}</div>
-    ${c.company?`<div class="detail-company">${c.company}</div>`:''}
+    <div class="detail-name">${esc(c.name)}${c.citizenship?` <span style="font-size:11px;color:#6b87b0;font-weight:500;margin-left:4px">🌍 ${esc(c.citizenship)}</span>`:''}</div>
+    <div class="detail-position">${esc(c.position)||'—'}</div>
+    ${c.company?`<div class="detail-company">${esc(c.company)}</div>`:''}
   </div>
 </div>
 <div class="form-label" style="margin-bottom:8px">Статус</div>
@@ -1611,12 +1613,12 @@ function openCandidateDetail(id){
 ${(c.currentCompany||c.currentRole||c.currentTenure)?`
 <div style="padding:10px;background:#f7faff;border-radius:10px;border-left:3px solid #1e7de8;margin-bottom:10px;font-size:12px">
   <div style="font-size:10px;color:#6b87b0;font-weight:700;text-transform:uppercase;margin-bottom:4px">💼 Текущий опыт</div>
-  ${c.currentRole?`<div style="font-weight:700">${c.currentRole}</div>`:''}
-  ${c.currentCompany?`<div style="color:#6b87b0">${c.currentCompany}</div>`:''}
-  ${c.currentTenure?`<div style="font-size:11px;color:#6b87b0;margin-top:2px">${c.currentTenure}</div>`:''}
+  ${c.currentRole?`<div style="font-weight:700">${esc(c.currentRole)}</div>`:''}
+  ${c.currentCompany?`<div style="color:#6b87b0">${esc(c.currentCompany)}</div>`:''}
+  ${c.currentTenure?`<div style="font-size:11px;color:#6b87b0;margin-top:2px">${esc(c.currentTenure)}</div>`:''}
 </div>`:''}
 <div class="info-grid">
-  <div class="info-cell"><div class="info-cell-label">💼 Вакансия</div><div class="info-cell-value">${vac?vac.title:(c.vacancyText||'—')}</div></div>
+  <div class="info-cell"><div class="info-cell-label">💼 Вакансия</div><div class="info-cell-value">${esc(vac?vac.title:(c.vacancyText||''))||'—'}</div></div>
   <div class="info-cell"><div class="info-cell-label">💰 Зарплата</div><div class="info-cell-value">${fmtSalary(c.salaryMin,c.salaryMax)}</div></div>
   <div class="info-cell"><div class="info-cell-label">📅 Собеседование</div><div class="info-cell-value">${fmtDate(c.interviewDate)}</div></div>
   <div class="info-cell"><div class="info-cell-label">📌 Следующий шаг</div><div class="info-cell-value">${fmtDate(c.nextAction)}</div></div>
@@ -1633,9 +1635,9 @@ ${(c.currentCompany||c.currentRole||c.currentTenure)?`
 </div>
 ${(c.phones.length||c.emails.length||c.socials.length)?`
 <div style="margin-bottom:12px">
-  ${c.phones.map(p=>`<div class="contact-item">📞 <a href="tel:${p.value}" style="color:var(--blue)">${p.value}</a> <span style="font-size:10px;color:#6b87b0">${p.type}</span></div>`).join('')}
-  ${c.emails.map(e=>`<div class="contact-item">✉️ <a href="mailto:${e.value}" style="color:var(--blue)">${e.value}</a></div>`).join('')}
-  ${c.socials.map(s=>`<div class="contact-item">${s.type==='Telegram'?'✈️':'🌐'} ${s.value}</div>`).join('')}
+  ${c.phones.map(p=>`<div class="contact-item">📞 <a href="tel:${esc(p.value)}" style="color:var(--blue)">${esc(p.value)}</a> <span style="font-size:10px;color:#6b87b0">${esc(p.type)}</span></div>`).join('')}
+  ${c.emails.map(e=>`<div class="contact-item">✉️ <a href="mailto:${esc(e.value)}" style="color:var(--blue)">${esc(e.value)}</a></div>`).join('')}
+  ${c.socials.map(s=>`<div class="contact-item">${s.type==='Telegram'?'✈️':'🌐'} ${esc(s.value)}</div>`).join('')}
 </div>`:''}
 <div class="file-section">
   <div class="section-title" style="font-size:13px">📎 Файлы</div>
@@ -1644,7 +1646,7 @@ ${(c.phones.length||c.emails.length||c.socials.length)?`
 </div>
 <div class="activity-log">
   <div class="section-title" style="font-size:13px">📋 Активность</div>
-  ${(c.activityLog||[]).slice().reverse().map(e=>`<div class="activity-entry"><div class="activity-date">${e.date}</div><div>${e.text}</div></div>`).join('')}
+  ${(c.activityLog||[]).slice().reverse().map(e=>`<div class="activity-entry"><div class="activity-date">${esc(e.date)}</div><div>${esc(e.text)}</div></div>`).join('')}
   <div class="add-note-row" style="margin-top:8px">
     <input class="add-note-input" id="note-inp-${id}" placeholder="Добавить заметку…">
     <button class="add-note-btn" onclick="addNote('${id}')">+ Добавить</button>
@@ -1730,7 +1732,7 @@ function openCandidateForm(id){pendingCandPhoto=null;
 <div class="form-group"><label class="form-label">Дата собеседования</label><input class="form-input" id="cf-id" type="date" value="${c?c.interviewDate||'':''}"></div>
 <div class="form-group"><label class="form-label">Следующий шаг</label><input class="form-input" id="cf-nd" type="date" value="${c?c.nextAction||'':''}"></div>
 <div class="form-group"><label class="form-label">Дата внесения (из источника)</label><input class="form-input" id="cf-srcdate" type="date" value="${c?c.sourcedAt||'':''}"></div>
-<div class="form-group"><label class="form-label">Заметки</label><textarea class="form-textarea" id="cf-no">${c?c.notes||'':''}</textarea></div>
+<div class="form-group"><label class="form-label">Заметки</label><textarea class="form-textarea" id="cf-no">${c?esc(c.notes||''):''}</textarea></div>
 <button class="btn-primary" onclick="saveCandForm('${id||''}')">💾 Сохранить</button>
 <button class="btn-secondary" onclick="closeSheet()">Отмена</button>
 `);
@@ -2403,10 +2405,10 @@ async function handleIPhoneImport(input){
     let html = '<div style="padding:10px;background:#e8f5ff;border-radius:8px;font-size:12px;margin-bottom:8px"><b>'+allContacts.length+'</b> контактов из '+vcfFiles.length+' файл(ов)</div>';
     html += '<div style="max-height:260px;overflow-y:auto">';
     allContacts.slice(0,10).forEach(c=>{
-      const photoHTML = c.photo ? '<img src="'+c.photo+'" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0" alt="">' : '<div style="width:32px;height:32px;border-radius:50%;background:#d0e4ff;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">👤</div>';
-      html += '<div style="display:flex;align-items:center;gap:10px;padding:8px;margin:4px 0;background:#f0f7ff;border-radius:8px;font-size:12px">'+photoHTML+'<div style="flex:1;min-width:0"><div style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+c.name+'</div>';
+      const photoHTML = c.photo ? '<img src="'+esc(c.photo)+'" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0" alt="">' : '<div style="width:32px;height:32px;border-radius:50%;background:#d0e4ff;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">👤</div>';
+      html += '<div style="display:flex;align-items:center;gap:10px;padding:8px;margin:4px 0;background:#f0f7ff;border-radius:8px;font-size:12px">'+photoHTML+'<div style="flex:1;min-width:0"><div style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(c.name)+'</div>';
       const meta=[c.position,c.company,c.phones[0],c.emails[0]].filter(Boolean).join(' · ');
-      if(meta) html+='<div style="font-size:10px;color:#6b87b0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+meta+'</div>';
+      if(meta) html+='<div style="font-size:10px;color:#6b87b0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(meta)+'</div>';
       html += '</div></div>';
     });
     if(allContacts.length>10) html += '<div style="text-align:center;color:#6b87b0;font-size:11px;padding:4px">...ещё '+(allContacts.length-10)+'</div>';
@@ -2708,10 +2710,10 @@ async function handleEmailBookUpload(input){
   let html = '<div style="padding:10px;background:#e8f5ff;border-radius:8px;font-size:12px;margin-bottom:8px"><b>'+allContacts.length+'</b> контактов извлечено из '+files.length+' файл(ов)</div>';
   html += '<div style="max-height:260px;overflow-y:auto">';
   allContacts.slice(0,10).forEach(c=>{
-    const photoHTML = c.photo ? '<img src="'+c.photo+'" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0" alt="">' : '<div style="width:32px;height:32px;border-radius:50%;background:#d0e4ff;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">👤</div>';
-    html += '<div style="display:flex;align-items:center;gap:10px;padding:8px;margin:4px 0;background:#f0f7ff;border-radius:8px;font-size:12px">'+photoHTML+'<div style="flex:1;min-width:0"><div style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+c.name+'</div>';
+    const photoHTML = c.photo ? '<img src="'+esc(c.photo)+'" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0" alt="">' : '<div style="width:32px;height:32px;border-radius:50%;background:#d0e4ff;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">👤</div>';
+    html += '<div style="display:flex;align-items:center;gap:10px;padding:8px;margin:4px 0;background:#f0f7ff;border-radius:8px;font-size:12px">'+photoHTML+'<div style="flex:1;min-width:0"><div style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(c.name)+'</div>';
     const meta=[c.position,c.company,(c.phones[0]&&c.phones[0].value),(c.emails[0]&&c.emails[0].value)].filter(Boolean).join(' · ');
-    if(meta) html+='<div style="font-size:10px;color:#6b87b0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+meta+'</div>';
+    if(meta) html+='<div style="font-size:10px;color:#6b87b0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(meta)+'</div>';
     html+='</div></div>';
   });
   if(allContacts.length>10) html += '<div style="text-align:center;color:#6b87b0;font-size:11px;padding:4px">...ещё '+(allContacts.length-10)+'</div>';
@@ -3148,13 +3150,13 @@ function _iosShowFileOverlay(fileName, mime, dataUrl){
   ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(4,10,30,0.96);backdrop-filter:blur(6px);display:flex;flex-direction:column;padding:12px;padding-top:max(12px,env(safe-area-inset-top));padding-bottom:max(12px,env(safe-area-inset-bottom))';
   let body = '';
   if (mime.startsWith('image/')) {
-    body = '<img src="'+dataUrl+'" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:12px" alt="'+fileName+'">';
+    body = '<img src="'+dataUrl+'" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:12px" alt="'+esc(fileName)+'">';
   } else if (mime === 'application/pdf') {
     body = '<iframe src="'+dataUrl+'" style="flex:1;width:100%;border:none;border-radius:12px;background:white"></iframe>';
   } else {
-    body = '<div style="color:white;padding:20px;background:rgba(255,255,255,0.08);border-radius:12px;text-align:center"><div style="font-size:48px;margin-bottom:12px">'+fileIcon(fileName)+'</div><div style="font-size:15px;font-weight:600">'+fileName+'</div><div style="font-size:12px;color:rgba(255,255,255,0.6);margin-top:8px">'+mime+'</div><a href="'+dataUrl+'" download="'+fileName+'" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#1e7de8;color:white;text-decoration:none;border-radius:10px;font-weight:600">⤓ Открыть файл</a><div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:10px">Нажмите и удерживайте ссылку<br>→ «Загрузить связанный файл»</div></div>';
+    body = '<div style="color:white;padding:20px;background:rgba(255,255,255,0.08);border-radius:12px;text-align:center"><div style="font-size:48px;margin-bottom:12px">'+fileIcon(fileName)+'</div><div style="font-size:15px;font-weight:600">'+esc(fileName)+'</div><div style="font-size:12px;color:rgba(255,255,255,0.6);margin-top:8px">'+esc(mime)+'</div><a href="'+dataUrl+'" download="'+esc(fileName)+'" style="display:inline-block;margin-top:16px;padding:12px 24px;background:#1e7de8;color:white;text-decoration:none;border-radius:10px;font-weight:600">⤓ Открыть файл</a><div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:10px">Нажмите и удерживайте ссылку<br>→ «Загрузить связанный файл»</div></div>';
   }
-  ov.innerHTML = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><div style="color:white;flex:1;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+fileName+'</div><button onclick="document.getElementById(\'ios-file-overlay\').remove()" style="background:rgba(255,255,255,0.15);border:none;color:white;width:36px;height:36px;border-radius:50%;font-size:18px;cursor:pointer">✕</button></div><div style="flex:1;display:flex;align-items:center;justify-content:center;overflow:auto">'+body+'</div>';
+  ov.innerHTML = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px"><div style="color:white;flex:1;font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(fileName)+'</div><button onclick="document.getElementById(\'ios-file-overlay\').remove()" style="background:rgba(255,255,255,0.15);border:none;color:white;width:36px;height:36px;border-radius:50%;font-size:18px;cursor:pointer">✕</button></div><div style="flex:1;display:flex;align-items:center;justify-content:center;overflow:auto">'+body+'</div>';
   document.body.appendChild(ov);
 }
 async function deleteCandFile(candId,fileId){
@@ -3653,24 +3655,25 @@ async function aiAssessCandidate(candId) {
     let html = '';
     if (result.score) {
       const color = result.score >= 7 ? '#22c55e' : result.score >= 5 ? '#f59e0b' : '#ef4444';
-      html += '<div style="text-align:center;margin-bottom:12px"><span style="font-size:32px;font-weight:800;color:' + color + '">' + result.score + '</span><span style="color:#999">/10</span></div>';
+      html += '<div style="text-align:center;margin-bottom:12px"><span style="font-size:32px;font-weight:800;color:' + color + '">' + esc(result.score) + '</span><span style="color:#999">/10</span></div>';
     }
+    // Ответ AI — недоверенный: он пересказывает содержимое CV (prompt injection).
     if (result.strengths && result.strengths.length) {
       html += '<div style="margin-bottom:8px"><b style="color:#22c55e">✅ Сильные стороны:</b>';
-      result.strengths.forEach(function(s) { html += '<div style="font-size:13px;margin:2px 0;padding-left:16px">• ' + s + '</div>'; });
+      result.strengths.forEach(function(s) { html += '<div style="font-size:13px;margin:2px 0;padding-left:16px">• ' + esc(s) + '</div>'; });
       html += '</div>';
     }
     if (result.weaknesses && result.weaknesses.length) {
       html += '<div style="margin-bottom:8px"><b style="color:#f59e0b">⚠️ Слабые стороны:</b>';
-      result.weaknesses.forEach(function(s) { html += '<div style="font-size:13px;margin:2px 0;padding-left:16px">• ' + s + '</div>'; });
+      result.weaknesses.forEach(function(s) { html += '<div style="font-size:13px;margin:2px 0;padding-left:16px">• ' + esc(s) + '</div>'; });
       html += '</div>';
     }
     if (result.recommendation) {
-      html += '<div style="margin-bottom:8px"><b>💡 Рекомендация:</b><div style="font-size:13px;margin-top:2px">' + result.recommendation + '</div></div>';
+      html += '<div style="margin-bottom:8px"><b>💡 Рекомендация:</b><div style="font-size:13px;margin-top:2px">' + esc(result.recommendation) + '</div></div>';
     }
     if (result.interview_questions && result.interview_questions.length) {
       html += '<div><b>❓ Вопросы для интервью:</b>';
-      result.interview_questions.forEach(function(q, i) { html += '<div style="font-size:13px;margin:2px 0;padding-left:16px">' + (i+1) + '. ' + q + '</div>'; });
+      result.interview_questions.forEach(function(q, i) { html += '<div style="font-size:13px;margin:2px 0;padding-left:16px">' + (i+1) + '. ' + esc(q) + '</div>'; });
       html += '</div>';
     }
     
@@ -3746,8 +3749,10 @@ function showModal(title, content, buttons) {
   });
 
   // overflow-y:scroll + -webkit-overflow-scrolling:touch required for iOS scroll inside fixed overlay
+  // title всегда текст (часто содержит имя кандидата из CV) — экранируется на входе;
+  // content — намеренно HTML, за его безопасность отвечает вызывающий код.
   overlay.innerHTML = '<div style="background:white;border-radius:16px;padding:20px;max-width:400px;width:100%;max-height:82vh;overflow-y:scroll;-webkit-overflow-scrolling:touch;box-shadow:0 20px 60px rgba(0,0,0,.3)">'
-    + '<div style="font-size:17px;font-weight:700;margin-bottom:12px">' + title + '</div>'
+    + '<div style="font-size:17px;font-weight:700;margin-bottom:12px">' + esc(title) + '</div>'
     + '<div>' + content + '</div>'
     + '<div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">' + btnsHTML + '</div></div>';
 
@@ -4175,18 +4180,18 @@ function _showMatchDialog(existing, incoming) {
   return new Promise(function(resolve) {
     const photo = function(c) {
       return c.photo
-        ? '<img src="'+c.photo+'" style="width:56px;height:56px;border-radius:50%;object-fit:cover;border:2px solid #e0e0e0">'
+        ? '<img src="'+esc(c.photo)+'" style="width:56px;height:56px;border-radius:50%;object-fit:cover;border:2px solid #e0e0e0">'
         : '<div style="width:56px;height:56px;border-radius:50%;background:#eee;display:flex;align-items:center;justify-content:center;font-size:22px">👤</div>';
     };
     const field = function(label, val) {
-      return val ? '<div style="font-size:11px;color:#999">'+label+'</div><div style="font-size:13px;margin-bottom:4px">'+val+'</div>' : '';
+      return val ? '<div style="font-size:11px;color:#999">'+label+'</div><div style="font-size:13px;margin-bottom:4px">'+esc(val)+'</div>' : '';
     };
     const col = function(c, title) {
       const phone = (c.phones||[]).map(function(p){return p.value;}).join(', ');
       return '<div style="flex:1;padding:8px;background:#f9f9f9;border-radius:8px;min-width:0">'+
         '<div style="font-size:11px;font-weight:600;color:#888;margin-bottom:6px">'+title+'</div>'+
         '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'+photo(c)+
-        '<div style="font-size:14px;font-weight:600;overflow:hidden">'+c.name+'</div></div>'+
+        '<div style="font-size:14px;font-weight:600;overflow:hidden">'+esc(c.name)+'</div></div>'+
         field('Должность', c.position)+field('Телефон', phone)+'</div>';
     };
     const body = '<div style="font-size:13px;color:#555;margin-bottom:12px">Найдена похожая карточка. Как поступить?</div>'+
@@ -4493,12 +4498,12 @@ async function aiComposeMessage(candId) {
     if(body){
       html += '<div style="margin-bottom:10px"><div style="font-weight:700;margin-bottom:4px;color:#1e7de8">✉️ Email</div>';
       if(subject) html += '<div style="margin-bottom:6px;font-size:12px"><span style="color:#6b87b0">Тема:</span> <b>'+_escAttr(subject)+'</b></div>';
-      html += '<textarea id="ai-email-body" style="width:100%;min-height:140px;padding:10px;border:1px solid #d0e4ff;border-radius:10px;font-family:inherit;font-size:12px;background:#f8fbff;resize:vertical">'+body+'</textarea>';
+      html += '<textarea id="ai-email-body" style="width:100%;min-height:140px;padding:10px;border:1px solid #d0e4ff;border-radius:10px;font-family:inherit;font-size:12px;background:#f8fbff;resize:vertical">'+esc(body)+'</textarea>';
       html += '</div>';
     }
     if(tg){
       html += '<div><div style="font-weight:700;margin-bottom:4px;color:#0088cc">✈️ Telegram</div>';
-      html += '<textarea id="ai-tg-body" style="width:100%;min-height:80px;padding:10px;border:1px solid #d0e4ff;border-radius:10px;font-family:inherit;font-size:12px;background:#f0f7ff;resize:vertical">'+tg+'</textarea>';
+      html += '<textarea id="ai-tg-body" style="width:100%;min-height:80px;padding:10px;border:1px solid #d0e4ff;border-radius:10px;font-family:inherit;font-size:12px;background:#f0f7ff;resize:vertical">'+esc(tg)+'</textarea>';
       html += '</div>';
     }
     html += '</div>';
@@ -4562,8 +4567,8 @@ async function aiCheckDuplicates() {
       let html = '';
       dupes.forEach(function(d) {
         html += '<div style="padding:10px;margin:6px 0;background:#fff5f5;border-radius:8px;border-left:3px solid #ef4444;font-size:13px">';
-        html += '<b>' + (d.name1 || d.pair || '?') + '</b> ↔ <b>' + (d.name2 || '') + '</b>';
-        if (d.reason) html += '<div style="color:#666;margin-top:4px">' + d.reason + '</div>';
+        html += '<b>' + esc(d.name1 || d.pair || '?') + '</b> ↔ <b>' + esc(d.name2 || '') + '</b>';
+        if (d.reason) html += '<div style="color:#666;margin-top:4px">' + esc(d.reason) + '</div>';
         html += '</div>';
       });
       showModal('⚠️ Возможные дубликаты: ' + dupes.length, html, [
@@ -4722,7 +4727,7 @@ function openTeaserModal(candidateId) {
     <div style="margin-bottom:10px">
       <label style="font-size:11px;color:#888;font-weight:600;display:block;margin-bottom:3px;text-transform:uppercase;letter-spacing:.04em">${label}</label>
       ${type === 'textarea'
-        ? `<textarea id="${id}" rows="3" style="width:100%;padding:9px 11px;border:1.5px solid #ddd;border-radius:10px;font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit">${val||''}</textarea>`
+        ? `<textarea id="${id}" rows="3" style="width:100%;padding:9px 11px;border:1.5px solid #ddd;border-radius:10px;font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit">${esc(val||'')}</textarea>`
         : `<input id="${id}" type="text" value="${(val||'').replace(/"/g,'&quot;')}" style="width:100%;padding:9px 11px;border:1.5px solid #ddd;border-radius:10px;font-size:13px;box-sizing:border-box">`
       }
     </div>`;
