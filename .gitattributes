@@ -1,0 +1,8 @@
+# Хранить в репозитории только LF. Без этого на Windows (core.autocrlf=true)
+# один коммит может записать весь файл с CRLF, и правка в 40 строк выглядит
+# в диффе как 5000 изменённых строк — ревью становится бесполезным.
+* text=auto eol=lf
+*.html text eol=lf
+*.js   text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
