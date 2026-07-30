@@ -3648,7 +3648,8 @@ async function aiAssessCandidate(candId) {
     showModal('🤖 Оценка: ' + cand.name, html, [
       { text: 'Сохранить в заметки', cls: 'primary', action: function() {
         cand.notes = (cand.notes ? cand.notes + '\n\n' : '') + '--- AI оценка ---\nБалл: ' + (result.score || '?') + '/10\n' + (result.recommendation || '');
-        saveCandidates();
+        delete cand._searchHay; // notes feed the search haystack
+        saveData();
         closeModal();
       }},
       { text: 'Закрыть', action: function() { closeModal(); }}
