@@ -74,6 +74,22 @@ module.exports = function (t) {
     t.ok(/const bodyText = await resp\.text\(\)/.test(source), 'pin: callAI reads text before JSON.parse');
   }
 
+  // ── Import paths must call smartAddCandidate sequentially, never fanned out ──
+  // With strategy 'ask' the interactive dialog is created synchronously inside the
+  // Promise executor, so a parallel .map() dumps every duplicate dialog into the DOM
+  // at once. Every call site must be awaited in a loop instead.
+  {
+    const source = blocks.join('\n');
+    const fanned = [...source.matchAll(/\.map\(\s*[^)]*=>\s*smartAddCandidate\(/g)];
+    t.eq(fanned.length, 0, 'no import path fans out smartAddCandidate via .map() (found ' + fanned.length + ')');
+    const calls = [...source.matchAll(/(.{12})smartAddCandidate\s*\(/g)]
+      .filter(m => !/function\s+$/.test(m[1]));  // skip the declaration itself
+    for (const m of calls) {
+      t.ok(/await\s+$/.test(m[1]) || /\.then\(/.test(source.slice(m.index, m.index + 400)),
+        'smartAddCandidate call is awaited or explicitly chained ("' + m[1].trim() + 'smartAddCandidate(")');
+    }
+  }
+
   // ── No duplicate top-level function declarations (hoisting: last one silently wins) ──
   {
     const source = blocks.join('\n');

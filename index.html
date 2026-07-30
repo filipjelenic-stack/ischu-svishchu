@@ -1191,7 +1191,13 @@ function smartAddCandidate(newCand, opts){
       html += '<div style="padding:8px;background:#f5f5f5;border-radius:10px;font-size:12px;color:#6b87b0;margin-bottom:10px">В новом контакте нет дополнительной информации — все поля уже есть в существующем.</div>';
     }
     html += '</div>';
-    showModal('🔍 Найден дубликат', html, [
+    // «N из M» — чтобы при разборе пачки дублей было видно, сколько ещё впереди.
+    // Передаётся из последовательных циклов импорта (opts.progress).
+    const _pr = opts && opts.progress;
+    const _title = (_pr && _pr.total > 1)
+      ? '🔍 Дубликат · контакт ' + _pr.index + ' из ' + _pr.total
+      : '🔍 Найден дубликат';
+    showModal(_title, html, [
       { text: diff.noop ? '🔄 Пересохранить (нет изменений)' : '✨ Умное обновление (дополнить)', cls:'primary', action:function(){
         mergeCandidate(dup, newCand, {updateName:true});
         closeModal();
@@ -2856,18 +2862,20 @@ function smartParseText(){
     pending.push({id:genId(),name,position,company,status:'new',source:'other',vacancy:'',rating:3,salaryMin:0,salaryMax:0,interviewDate:'',nextAction:'',phones:phones.map(p=>({type:'mobile',value:p})),emails:emails.map(e=>({type:'work',value:e})),socials:tgs.map(t=>({type:'Telegram',value:t})),notes:'',files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Импорт из текста',type:'note'}]});
   });
   if(!pending.length){ showToast('Не удалось распознать контакты','info'); return; }
-  askDedupeStrategy('Импорт из текста ('+pending.length+' контактов)').then(function(strategy){
+  askDedupeStrategy('Импорт из текста ('+pending.length+' контактов)').then(async function(strategy){
     if(strategy===null) return;
     let added=0,merged=0,skipped=0;
-    const proms=pending.map(nc=>smartAddCandidate(nc,{autoStrategy:strategy}).then(r=>{
+    // Последовательно, а не через .map()+Promise.all: при стратегии «показать и решить
+    // по каждому» тело new Promise выполняется синхронно, поэтому параллельный запуск
+    // вываливал все диалоги дубликатов в DOM за один тик. Ждём каждый ответ.
+    for(let i=0;i<pending.length;i++){
+      const r = await smartAddCandidate(pending[i],{autoStrategy:strategy, progress:{index:i+1, total:pending.length}});
       if(r.action==='added') added++;
       else if(r.action==='merged') merged++;
       else skipped++;
-    }));
-    Promise.all(proms).then(()=>{
-      saveData();closeSheet();renderScreen(currentTab);
-      showToast('Импорт: +'+added+' новых, '+merged+' обновлено'+(skipped?', '+skipped+' пропущено':''),'success',5000);
-    });
+    }
+    saveData();closeSheet();renderScreen(currentTab);
+    showToast('Импорт: +'+added+' новых, '+merged+' обновлено'+(skipped?', '+skipped+' пропущено':''),'success',5000);
   });
 }
 
@@ -2992,18 +3000,19 @@ function confirmVCardImport(){
     __vcardPending.push({id:genId(),name:vc.name,position:vc.position||'',company:vc.company||'',status:'new',source:'other',vacancy:'',rating:3,salaryMin:0,salaryMax:0,interviewDate:'',nextAction:'',phones:vc.phones.map(p=>({type:'mobile',value:p})),emails:vc.emails.map(e=>({type:'work',value:e})),socials:socials,notes:vc.note||'',photo:vc.photo||null,files:[],created:todayStr(),activityLog:[{id:genId(),date:new Date().toISOString().slice(0,16).replace('T',' '),text:'Импорт из vCard (iPhone)',type:'note'}]});
   });
   if(!__vcardPending.length){ showToast('Нет контактов для импорта','info'); return; }
-  askDedupeStrategy('vCard-импорт ('+__vcardPending.length+' контактов)').then(function(strategy){
+  askDedupeStrategy('vCard-импорт ('+__vcardPending.length+' контактов)').then(async function(strategy){
     if(strategy===null){ return; }
     let added=0, merged=0, skipped=0;
-    const proms=__vcardPending.map(nc=>smartAddCandidate(nc,{autoStrategy:strategy}).then(r=>{
+    // Последовательно — см. комментарий в smartParseText: параллельный .map() открывал
+    // все диалоги дубликатов разом.
+    for(let i=0;i<__vcardPending.length;i++){
+      const r = await smartAddCandidate(__vcardPending[i],{autoStrategy:strategy, progress:{index:i+1, total:__vcardPending.length}});
       if(r.action==='added') added++;
       else if(r.action==='merged') merged++;
       else skipped++;
-    }));
-    Promise.all(proms).then(()=>{
-      saveData();closeSheet();renderScreen(currentTab);
-      showToast('vCard импорт: +'+added+' новых, '+merged+' обновлено, '+skipped+' пропущено','success',5000);
-    });
+    }
+    saveData();closeSheet();renderScreen(currentTab);
+    showToast('vCard импорт: +'+added+' новых, '+merged+' обновлено, '+skipped+' пропущено','success',5000);
   });
 }
 
