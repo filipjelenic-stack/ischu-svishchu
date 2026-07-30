@@ -90,6 +90,26 @@ module.exports = function (t) {
     }
   }
 
+  // ── Windowed list must stay windowed, and must reset on filter change ──
+  {
+    const source = blocks.join('\n');
+    t.ok(/const CAND_PAGE\s*=\s*\d+/.test(source), 'window: CAND_PAGE page size defined');
+    t.ok(/visible\s*=\s*filtered\.slice\(0,\s*shown\)/.test(source), 'window: list renders a slice, not all of filtered');
+    t.ok(/_sig\s*!==\s*_lastCandSig[\s\S]{0,80}candShown\s*=\s*CAND_PAGE/.test(source),
+      'window: changing search/filter resets the window to page 1');
+    // The signature must cover every filter field — a missing one means a stale window.
+    for (const field of ['candSearch', 'candFilters.status', 'candFilters.source',
+                         'candFilters.citizenship', 'candFilters.direction', 'candFilters.position']) {
+      const sigLine = (source.match(/const _sig = \[[^\]]*\]/) || [''])[0];
+      t.ok(sigLine.includes(field), 'window: filter signature includes ' + field);
+    }
+    // Kanban headers must report the FULL count even though columns are capped.
+    t.ok(/\$\{STATUSES\[s\]\}\s*\(\$\{all\.length\}\)/.test(source), 'window: kanban header shows full count, not the capped slice');
+    // Focus/cursor restoration must survive — it is what keeps live-typing usable.
+    t.ok(/const focusedId=\(act && act\.id && el\.contains\(act\)\)/.test(source), 'window: focus capture still present');
+    t.ok(/nxt\.setSelectionRange\(selStart/.test(source), 'window: cursor restoration still present');
+  }
+
   // ── No duplicate top-level function declarations (hoisting: last one silently wins) ──
   {
     const source = blocks.join('\n');

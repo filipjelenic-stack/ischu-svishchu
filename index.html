@@ -1443,6 +1443,26 @@ function _scheduleCandRender(){
 function onCandSearchInput(v){ candSearch=v; _scheduleCandRender(); }
 function onCandPosInput(v){ candFilters.position=v; _scheduleCandRender(); }
 
+// ── Оконная отрисовка списка ────────────────────────────────────────────────
+// Отрисовка всех карточек разом — самое дорогое место в приложении: на 7500
+// записях это ~180 мс и 67 тысяч DOM-узлов на КАЖДУЮ перерисовку, в том числе
+// на каждый ввод в поиске. Первые 100 карточек рисуются за ~2 мс. Показываем
+// окно, остальное — по кнопке «Показать ещё».
+const CAND_PAGE = 100;
+let candShown = CAND_PAGE;
+// Подпись текущего фильтра. Как только она меняется (поиск, любой фильтр) —
+// окно сбрасывается на первую страницу. Считаем её внутри renderCandidates,
+// поэтому ни один путь изменения фильтра нельзя случайно забыть: inline-обработчики
+// в разметке правят candFilters напрямую и просто зовут renderCandidates().
+let _lastCandSig = null;
+function showMoreCands(){
+  candShown += CAND_PAGE;   // подпись не меняется → сброса окна не будет
+  renderCandidates();
+}
+// Канбан: колонки прокручиваются по горизонтали, поэтому длинные колонки режем
+// жёстче — иначе одна колонка «Новые» с тысячами карточек сводит окно на нет.
+const KANBAN_COL_MAX = 50;
+
 function renderCandidates(){
   const el=document.getElementById('screen-1');
   // Remember which input was focused AND its cursor position — so live-typing doesn't
@@ -1477,6 +1497,12 @@ function renderCandidates(){
     }
     return true;
   });
+  // Сброс окна при любой смене фильтра/поиска — см. комментарий у _lastCandSig.
+  const _sig = [candSearch, candFilters.status, candFilters.source, candFilters.citizenship, candFilters.direction, candFilters.position].join(' ');
+  if(_sig !== _lastCandSig){ _lastCandSig = _sig; candShown = CAND_PAGE; }
+  const shown = Math.min(candShown, filtered.length);
+  const visible = filtered.slice(0, shown);
+
   // Dynamic citizenship list — only shows values that actually exist so the dropdown
   // doesn't get bloated with countries the user has never imported.
   const citizens = Array.from(new Set(candidates.map(c=>c.citizenship).filter(Boolean))).sort();
@@ -1517,7 +1543,10 @@ ${activeCount?`<div style="margin-bottom:10px;text-align:right"><button onclick=
   <button class="view-btn${candView==='list'?' active':''}" onclick="candView='list';renderCandidates()">☰ Список</button>
   <button class="view-btn${candView==='kanban'?' active':''}" onclick="candView='kanban';renderCandidates()">⊞ Воронка</button>
 </div>
-${candView==='list'?(filtered.length?filtered.map(c=>{
+${(candView==='list'&&filtered.length)?`<div style="font-size:11px;color:#6b87b0;padding:0 2px 7px;display:flex;justify-content:space-between;align-items:center">
+  <span>${shown<filtered.length?'Показано '+shown+' из '+filtered.length:filtered.length+(filtered.length===candidates.length?'':' из '+candidates.length)}</span>
+</div>`:''}
+${candView==='list'?(filtered.length?visible.map(c=>{
   const subLine = (c.currentRole||c.currentCompany) ? (c.currentRole||'')+(c.currentRole&&c.currentCompany?' @ ':'')+(c.currentCompany||'') : (c.position+(c.company?' · '+c.company:''));
   return `
   <div class="candidate-card" onclick="openCandidateDetail('${c.id}')">
@@ -1533,7 +1562,8 @@ ${candView==='list'?(filtered.length?filtered.map(c=>{
       </div>
     </div>
   </div>`;
-}).join(''):'<div class="empty-state"><div class="es-emoji">👥</div><p>Кандидаты не найдены</p></div>')
+}).join('')+(shown<filtered.length?`<button onclick="showMoreCands()" style="width:100%;padding:13px;margin:4px 0 10px;border:1.5px solid #d0e4ff;border-radius:12px;background:#f7fbff;color:#1e7de8;font-size:13.5px;font-weight:700;cursor:pointer;font-family:'Nunito',sans-serif;-webkit-tap-highlight-color:transparent">Показать ещё ${Math.min(CAND_PAGE, filtered.length-shown)} · осталось ${filtered.length-shown}</button>`:'')
+:'<div class="empty-state"><div class="es-emoji">👥</div><p>Кандидаты не найдены</p></div>')
 :renderKanban(filtered)}`;
   // Restore focus + cursor to whichever input was active before the innerHTML replace.
   // Without this, typing one letter into the search (or position filter) blurs the
@@ -1551,15 +1581,18 @@ ${candView==='list'?(filtered.length?filtered.map(c=>{
 
 function renderKanban(list){
   return `<div class="kanban">${STATUS_ORDER.map(s=>{
-    const cards=list.filter(c=>c.status===s);
+    const all=list.filter(c=>c.status===s);
+    // Счётчик в шапке показывает ПОЛНОЕ число, рисуем только первые KANBAN_COL_MAX.
+    const cards=all.slice(0, KANBAN_COL_MAX);
+    const hidden=all.length-cards.length;
     return `<div class="kanban-col">
-      <div class="kanban-col-header status-pill status-${s}">${STATUSES[s]} (${cards.length})</div>
+      <div class="kanban-col-header status-pill status-${s}">${STATUSES[s]} (${all.length})</div>
       <div class="kanban-cards">${cards.length?cards.map(c=>`
         <div class="kanban-card" onclick="openCandidateDetail('${c.id}')">
           <div class="kanban-card-name">${esc(c.name)}</div>
           <div class="kanban-card-pos">${esc(c.position)}</div>
           ${(c.salaryMin||c.salaryMax)?`<div style="font-size:11px;color:#6b87b0;margin-top:3px">${fmtSalary(c.salaryMin,c.salaryMax)}</div>`:''}
-        </div>`).join(''):'<div style="font-size:11px;color:#c0cfe8;text-align:center;padding:8px">Пусто</div>'}
+        </div>`).join('')+(hidden>0?`<div style="font-size:11px;color:#6b87b0;text-align:center;padding:8px">…и ещё ${hidden}. Откройте «Список», чтобы увидеть всех.</div>`:''):'<div style="font-size:11px;color:#c0cfe8;text-align:center;padding:8px">Пусто</div>'}
       </div>
     </div>`;
   }).join('')}</div>`;
