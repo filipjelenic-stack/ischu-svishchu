@@ -3770,8 +3770,11 @@ function showModal(title, content, buttons) {
 }
 
 function closeModal() {
-  const m = document.querySelector('.modal-overlay');
-  if (m) m.remove();
+  // ПОСЛЕДНЮЮ, не первую: querySelector брал самый старый оверлей, поэтому при
+  // двух наложенных модалках (например «Согласие», которая переоткрывает себя)
+  // закрывалась не та, что видна, и «Закрыть» приходилось жать дважды.
+  const all = document.querySelectorAll('.modal-overlay');
+  if (all.length) all[all.length - 1].remove();
 }
 
 
@@ -4979,8 +4982,10 @@ async function openB2BDashboard(){
   html += '</div>';
 
   showModal('🔒 Закрытая база B2B', html, [
-    { text: '🔄 Обновить', action: function(){ openB2BDashboard(); } },
-    { text: '⚙️ Настройки', action: function(){ showPortalSettings(); } },
+    // closeModal перед повторным открытием: иначе каждое обновление оставляет
+    // предыдущий оверлей под новым и «Закрыть» надо жать столько же раз.
+    { text: '🔄 Обновить', action: function(){ closeModal(); openB2BDashboard(); } },
+    { text: '⚙️ Настройки', action: function(){ closeModal(); showPortalSettings(); } },
     { text: 'Закрыть', cls: 'primary', action: function(){ closeModal(); } }
   ]);
 }
@@ -4993,18 +4998,18 @@ async function b2bCreateCompany(){
   try {
     await b2bApi('/api/admin/members', 'POST', { email, company, name, group:'free' });
     alert('✅ Компания добавлена. Ссылка для входа отправлена на email.');
-    openB2BDashboard();
+    closeModal(); openB2BDashboard();
   } catch(e){ alert(e.message==='exists' ? 'Компания с таким email уже существует' : '❌ '+e.message); }
 }
 
 async function b2bMemberAction(id, action){
   if (action==='disable' && !confirm('Отключить доступ этой компании?')) return;
-  try { await b2bApi('/api/admin/members/'+id+'/'+action, 'POST'); openB2BDashboard(); }
+  try { await b2bApi('/api/admin/members/'+id+'/'+action, 'POST'); closeModal(); openB2BDashboard(); }
   catch(e){ alert('❌ '+e.message); }
 }
 
 async function b2bReqAction(id, action){
-  try { await b2bApi('/api/admin/requests/'+id+'/'+action, 'POST'); openB2BDashboard(); }
+  try { await b2bApi('/api/admin/requests/'+id+'/'+action, 'POST'); closeModal(); openB2BDashboard(); }
   catch(e){ alert('❌ '+e.message); }
 }
 
@@ -5132,6 +5137,7 @@ async function consentSend(candidateId, channel){
   }
 
   await _consentSetStatus(c, 'requested', channel);
+  closeModal(); // иначе оверлей согласия остаётся под новым
   openConsentModal(candidateId);
 }
 
