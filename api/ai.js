@@ -51,6 +51,10 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  // Responses carry personal data parsed out of CVs (names, phones, emails).
+  // Vercel's default here is "public, max-age=0, must-revalidate" — `public` lets
+  // shared/proxy caches store it. Nothing from this endpoint may be cached anywhere.
+  res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
