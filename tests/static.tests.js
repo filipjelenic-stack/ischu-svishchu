@@ -23,11 +23,11 @@ module.exports = function (t) {
     // IDs that are legitimately absent from static markup, plus known orphans.
     // Each entry here was manually verified during the 2026-07 audit — extend only
     // after checking why the ID is not rendered.
-    const RUNTIME_OK = new Set([
-      // Audit finding: orphans inside dead, never-called aiSmartImport() —
-      // kept until removal of the dead function is approved.
-      'imp-text-area', 'ai-import-btn',
-    ]);
+    // Empty on purpose: as of the 2026-07 audit every getElementById target is
+    // rendered somewhere. The two former orphans (imp-text-area, ai-import-btn)
+    // disappeared with the dead aiSmartImport(). Add entries only after verifying
+    // WHY an ID is never rendered.
+    const RUNTIME_OK = new Set([]);
     const missing = [];
     for (const id of ids) {
       if (RUNTIME_OK.has(id)) continue;
