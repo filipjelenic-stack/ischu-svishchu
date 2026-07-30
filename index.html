@@ -1848,6 +1848,16 @@ function saveVacForm(id){
 // ── SCREEN 3: CALENDAR ──
 let calY=new Date().getFullYear(),calM=new Date().getMonth(),calSel=todayStr();
 
+// Единственная точка чтения событий календаря. Битый JSON в localStorage
+// (обрыв записи при переполнении квоты и т.п.) раньше навсегда ломал вкладку
+// «Календарь» — JSON.parse кидал исключение при каждом открытии.
+function _calEvents(){
+  try{
+    const v=JSON.parse(localStorage.getItem('ischu_cal_events')||'[]');
+    return Array.isArray(v)?v:[];
+  }catch(e){ return []; }
+}
+
 function renderCalendar(){
   const el=document.getElementById('screen-3');
   const td=todayStr();
@@ -1867,7 +1877,7 @@ function renderCalendar(){
     if(v.deadline){(evMap[v.deadline]=evMap[v.deadline]||[]).push({label:'Дедлайн: '+v.title,vid:v.id,color:'#7c3aed',sub:'Вакансия',type:'vacancy'})}
   });
   // Custom calendar events
-  const calEvents=JSON.parse(localStorage.getItem('ischu_cal_events')||'[]');
+  const calEvents=_calEvents();
   calEvents.forEach(e=>{
     (evMap[e.date]=evMap[e.date]||[]).push({label:e.title,eid:e.id,color:e.color||'#0a9e7e',sub:e.category||'Событие',type:'custom',linkedCid:e.candidateId,linkedVid:e.vacancyId});
   });
@@ -1938,13 +1948,13 @@ function saveCalEvent(){
   const cat=document.getElementById('ce-cat').value;
   const colors={'Встреча':'#1e7de8','Звонок':'#0a9e7e','Собеседование':'#1ab8cc','Напоминание':'#e8a020','Дедлайн':'#c62828','Другое':'#7c3aed'};
   const ev={id:genId(),title,date:document.getElementById('ce-date').value,time:document.getElementById('ce-time').value,category:cat,color:colors[cat]||'#1e7de8',candidateId:document.getElementById('ce-cand').value,vacancyId:document.getElementById('ce-vac').value,note:document.getElementById('ce-note').value.trim()};
-  const evts=JSON.parse(localStorage.getItem('ischu_cal_events')||'[]');
+  const evts=_calEvents();
   evts.push(ev);
   localStorage.setItem('ischu_cal_events',JSON.stringify(evts));
   closeSheet();renderCalendar();
 }
 function openCalEventDetail(eid){
-  const evts=JSON.parse(localStorage.getItem('ischu_cal_events')||'[]');
+  const evts=_calEvents();
   const e=evts.find(x=>x.id===eid);if(!e)return;
   const cand=e.candidateId?candidates.find(c=>c.id===e.candidateId):null;
   const vac=e.vacancyId?vacancies.find(v=>v.id===e.vacancyId):null;
@@ -1963,7 +1973,7 @@ ${e.note?`<div class="form-group"><div class="form-label">📝 Заметка</d
 }
 function deleteCalEvent(eid){
   if(!confirm('Удалить событие?'))return;
-  let evts=JSON.parse(localStorage.getItem('ischu_cal_events')||'[]');
+  let evts=_calEvents();
   evts=evts.filter(e=>e.id!==eid);
   localStorage.setItem('ischu_cal_events',JSON.stringify(evts));
   closeSheet();renderCalendar();
