@@ -3698,9 +3698,9 @@ function showAISettings() {
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + secret },
           body: JSON.stringify({ action: 'smart_import', data: { text: 'Тест: Иван Петров +79991234567 ivan@test.ru' }})
         });
-        const j = await r.json();
+        const j = await _respJson(r);
         if (j.ok) alert('✅ Подключение успешно! Провайдер: ' + (j.provider || '?'));
-        else alert('❌ Ошибка: ' + (j.error || 'Неизвестная'));
+        else alert('❌ Ошибка: ' + (j.error || ('HTTP ' + r.status)));
       } catch(e) { alert('❌ Не удалось подключиться: ' + e.message); }
     }},
     { text: 'Отмена', action: function() { closeModal(); }}
@@ -4784,8 +4784,8 @@ function openTeaserModal(candidateId) {
           headers: { 'Content-Type': 'application/json', 'X-Admin-Secret': cfg.secret },
           body: JSON.stringify(teaser)
         });
-        const j = await r.json();
-        if (!j.ok) throw new Error(j.error || 'Ошибка сервера');
+        const j = await _respJson(r);
+        if (!r.ok || !j.ok) throw new Error(j.error || ('Ошибка сервера (' + r.status + ')'));
         c.teaserCode = teaser.code;
         c.publishedToPortal = true;
         await db.candidates.put(c);
@@ -4823,8 +4823,8 @@ function openTeaserModal(candidateId) {
           const r = await fetch(cfg.url + '/api/admin/teasers/' + encodeURIComponent(c.teaserCode), {
             method: 'DELETE', headers: { 'X-Admin-Secret': cfg.secret }
           });
-          const j = await r.json();
-          if (!j.ok) throw new Error(j.error || 'Ошибка');
+          const j = await _respJson(r);
+          if (!r.ok || !j.ok) throw new Error(j.error || ('Ошибка (' + r.status + ')'));
           c.publishedToPortal = false; c.teaserCode = '';
           await db.candidates.put(c);
           candidates = candidates.map(x => x.id === c.id ? c : x);
@@ -4864,9 +4864,9 @@ function showPortalSettings() {
       const secret = document.getElementById('p-secret').value.trim();
       try {
         const r = await fetch(url + '/health');
-        const j = await r.json();
+        const j = await _respJson(r);
         if (j.status === 'ok') alert('✅ Портал доступен!');
-        else alert('⚠️ Ответ: ' + JSON.stringify(j));
+        else alert('⚠️ Ответ (' + r.status + '): ' + JSON.stringify(j).slice(0,120));
       } catch(e) { alert('❌ Не удалось подключиться: ' + e.message); }
     }},
     { text: 'Отмена', action: function() { closeModal(); }}
@@ -4875,6 +4875,15 @@ function showPortalSettings() {
 
 // ── B2B closed-base admin dashboard (members + disclosure requests) ──
 function b2bEsc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+// Parse a fetch Response that SHOULD be JSON but may be an HTML error page
+// (401/500/502 from Vercel или nginx). Text-first, как в callAI — иначе Safari
+// показывает бессмысленное «The string did not match the expected pattern».
+async function _respJson(r){
+  const text = await r.text();
+  try { return text ? JSON.parse(text) : {}; }
+  catch(e){ throw new Error('Сервер вернул ошибку (' + r.status + '). ' + (text||'').replace(/<[^>]*>/g,' ').trim().slice(0,120)); }
+}
 
 async function b2bApi(path, method, body){
   const cfg = getPortalConfig();
