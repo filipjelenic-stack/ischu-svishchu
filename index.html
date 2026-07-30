@@ -643,12 +643,15 @@ async function saveData(){
       return copy;
     });
     await db.transaction('rw',db.candidates,db.vacancies,db.tasks,async()=>{
+      // bulkPut, не bulkAdd: дубликат id (после восстановления копии + импорта)
+      // ронял ConstraintError → откат ВСЕЙ транзакции → на диске пусто, в UI всё
+      // выглядит нормально до перезагрузки. bulkPut дубликат просто перезаписывает.
       await db.candidates.clear();
-      if(cleanCands.length)await db.candidates.bulkAdd(cleanCands);
+      if(cleanCands.length)await db.candidates.bulkPut(cleanCands);
       await db.vacancies.clear();
-      if(vacancies.length)await db.vacancies.bulkAdd(vacancies);
+      if(vacancies.length)await db.vacancies.bulkPut(vacancies);
       await db.tasks.clear();
-      if(tasks.length)await db.tasks.bulkAdd(tasks);
+      if(tasks.length)await db.tasks.bulkPut(tasks);
     });
   }catch(e){
     console.error('saveData failed', e);
