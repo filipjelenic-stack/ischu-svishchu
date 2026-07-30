@@ -4440,27 +4440,27 @@ async function aiFileBatchImport() {
 
 // ─── CANDIDATE PHOTO ─────────────────────────
 
-function previewCandPhoto(input) {
+// Уже промисифицированные _readDU + _resizePhoto вместо ручных колбэков:
+// иначе (а) нажатие «Сохранить» до срабатывания вложенных колбэков теряло фото,
+// (б) нечитаемый файл (HEIC с iPhone — обычный случай) не давал ни превью, ни
+// сообщения об ошибке, потому что onerror нигде не был назначен.
+async function previewCandPhoto(input) {
   const file = input.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    // Resize to max 200px for storage efficiency
-    const img = new Image();
-    img.onload = function() {
-      const canvas = document.createElement('canvas');
-      const maxSz = 200;
-      let w = img.width, h = img.height;
-      if (w > h) { h = h * maxSz / w; w = maxSz; } else { w = w * maxSz / h; h = maxSz; }
-      canvas.width = w; canvas.height = h;
-      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-      pendingCandPhoto = canvas.toDataURL('image/jpeg', 0.7);
-      const preview = document.getElementById('cf-photo-preview');
-      if (preview) preview.innerHTML = '<img src="' + pendingCandPhoto + '" style="width:100%;height:100%;object-fit:cover">';
-    };
-    img.src = e.target.result;
-  };
-  reader.readAsDataURL(file);
+  const preview = document.getElementById('cf-photo-preview');
+  if (preview) preview.innerHTML = '<span style="font-size:16px">⏳</span>';
+  try {
+    const du = await _readDU(file);
+    if (!du) throw new Error('файл не прочитался');
+    const resized = await _resizePhoto(du, 200);
+    if (!resized) throw new Error('изображение не распознано');
+    pendingCandPhoto = resized;
+    if (preview) preview.innerHTML = '<img src="' + esc(pendingCandPhoto) + '" style="width:100%;height:100%;object-fit:cover">';
+  } catch(e) {
+    pendingCandPhoto = null;
+    if (preview) preview.innerHTML = '<span style="font-size:22px">📷</span>';
+    showToast('Не удалось загрузить фото. Попробуйте JPEG или PNG.', 'error', 4000);
+  }
 }
 
 
