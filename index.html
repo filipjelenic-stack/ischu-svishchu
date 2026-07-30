@@ -619,7 +619,10 @@ async function loadData(){
     }catch(e){console.warn('Migration failed, will retry on next load:', e);}
   }
   try{
-    candidates=(await db.candidates.toArray()).map(migrateCandidate).filter(Boolean);
+    // Drop search caches persisted by older versions — they predate the current
+    // haystack fields (phones/emails) and would silently break search for those fields.
+    candidates=(await db.candidates.toArray()).map(migrateCandidate).filter(Boolean)
+      .map(c=>{ delete c._searchHay; delete c._posHay; return c; });
     vacancies=(await db.vacancies.toArray()).map(migrateVacancy).filter(Boolean);
     tasks=(await db.tasks.toArray()).map(migrateTask).filter(Boolean);
   }catch(e){console.warn('loadData error', e); candidates=[];vacancies=[];tasks=[];}
@@ -629,14 +632,15 @@ async function loadData(){
 
 async function saveData(){
   try{
-    // Strip any residual base64 payload defensively — Blobs live only in db.files
+    // Strip any residual base64 payload defensively — Blobs live only in db.files.
+    // Also strip the _searchHay/_posHay caches: persisting them freezes search results
+    // to whatever fields the haystack had at cache time (e.g. before phone search existed).
     const cleanCands=candidates.map(c=>{
-      if(Array.isArray(c.files)&&c.files.some(f=>f&&f.data)){
-        const copy={...c};
-        copy.files=c.files.map(f=>{ const {data, ...rest}=f||{}; return rest; });
-        return copy;
+      const {_searchHay,_posHay,...copy}=c;
+      if(Array.isArray(copy.files)&&copy.files.some(f=>f&&f.data)){
+        copy.files=copy.files.map(f=>{ const {data, ...rest}=f||{}; return rest; });
       }
-      return c;
+      return copy;
     });
     await db.transaction('rw',db.candidates,db.vacancies,db.tasks,async()=>{
       await db.candidates.clear();
