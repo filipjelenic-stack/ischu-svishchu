@@ -7,6 +7,7 @@ const suites = [
   ['static gates', require('./static.tests')],
   ['unit (production functions)', require('./unit.tests')],
   ['regressions (5 past bugs)', require('./regression.tests')],
+  ['api/ai.js (prompt hardening)', require('./ai-api.tests')],
 ];
 
 let pass = 0, fail = 0;
