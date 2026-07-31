@@ -4047,6 +4047,47 @@ function _showMatchDialog(existing, incoming) {
   });
 }
 
+// ── Индикатор хода импорта ──────────────────────────────────────────────────
+// Раньше единственным признаком работы была надпись на самой кнопке импорта:
+// после выбора стратегии модалка закрывалась, экран выглядел обычным, и импорт
+// казался незапустившимся — хотя шёл. Разбор одного резюме занимает секунды,
+// пачка из 60 файлов — минуты, поэтому нужен заметный индикатор.
+// z-index 9998: ниже модалок (10000), чтобы диалог совпадения был поверх.
+function _importProgressShow(total){
+  _importProgressHide();
+  const ov=document.createElement('div');
+  ov.id='import-progress';
+  ov.style.cssText='position:fixed;inset:0;z-index:9998;background:rgba(4,10,30,0.55);-webkit-backdrop-filter:blur(5px);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:24px';
+  ov.innerHTML='<div style="background:#fff;border-radius:18px;padding:22px 20px;width:100%;max-width:340px;box-shadow:0 20px 60px rgba(4,10,30,.35);text-align:center;font-family:\'Nunito\',sans-serif">'
+    +'<div style="font-size:30px;margin-bottom:6px">📥</div>'
+    +'<div style="font-size:16px;font-weight:800;color:#1b2330;margin-bottom:3px">Импортирую резюме</div>'
+    +'<div id="ip-count" style="font-size:13px;color:#6b87b0;margin-bottom:12px">0 из '+total+'</div>'
+    +'<div style="height:8px;background:#eef3fa;border-radius:99px;overflow:hidden;margin-bottom:10px"><div id="ip-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#1e7de8,#6c3cf0);border-radius:99px;transition:width .25s ease"></div></div>'
+    +'<div id="ip-file" style="font-size:11.5px;color:#8896a8;min-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:10px"></div>'
+    +'<div id="ip-stats" style="font-size:12px;color:#0a9e7e;font-weight:700;min-height:16px"></div>'
+    +'<div style="font-size:11px;color:#a8b4c4;margin-top:12px;line-height:1.45">Это может занять несколько минут.<br>Не закрывайте приложение.</div>'
+    +'</div>';
+  document.body.appendChild(ov);
+}
+function _importProgressUpdate(done, total, fileName, stats){
+  const bar=document.getElementById('ip-bar'), cnt=document.getElementById('ip-count'),
+        fl=document.getElementById('ip-file'), st=document.getElementById('ip-stats');
+  if(bar) bar.style.width=Math.round(done/Math.max(total,1)*100)+'%';
+  if(cnt) cnt.textContent=done+' из '+total;
+  if(fl)  fl.textContent=fileName||'';
+  if(st && stats){
+    const parts=[];
+    if(stats.added)  parts.push('+'+stats.added+' новых');
+    if(stats.merged) parts.push(stats.merged+' обновлено');
+    if(stats.errors) parts.push('⚠ '+stats.errors);
+    st.textContent=parts.join(' · ');   // HTML схлопывает подряд идущие пробелы
+  }
+}
+function _importProgressHide(){
+  const ov=document.getElementById('import-progress');
+  if(ov) ov.remove();
+}
+
 async function aiFileBatchImport() {
   const files = window._pendingAIFiles || [];
   if (!files.length) { alert('Выберите файлы'); return; }
@@ -4057,15 +4098,24 @@ async function aiFileBatchImport() {
 
   const btn = document.getElementById('ai-file-import-btn');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Подготовка…'; }
+  _importProgressShow(files.length);
+  await new Promise(function(r){setTimeout(r,0);}); // дать браузеру отрисовать оверлей
 
   let added=0, merged=0, skipped=0, errors=0;
   const errorFiles = [];   // {name, reason} for every file that failed — shown at the end
   const skippedFiles = []; // {name} for files where AI found no contact
   const mergeOpts = {overwriteSalary:true, replaceContacts:true, updateName:true};
 
+  // try/finally: оверлей на весь экран, поэтому «залипший» индикатор заблокировал бы
+  // приложение целиком. Снимаем его при любом исходе, включая неожиданное исключение.
+  try {
   for (let i=0; i<files.length; i++) {
     const file = files[i];
     if (btn) btn.textContent = '⏳ ' + (i+1) + '/' + files.length + ' — ' + file.name.slice(0,22) + '…';
+    // Счётчик показывает НАЧАТЫЙ файл (i+1), полоса — уже завершённые (i):
+    // иначе на последнем файле полоса упиралась бы в 100% задолго до конца.
+    _importProgressUpdate(i, files.length, file.name, {added, merged, errors});
+    const _c=document.getElementById('ip-count'); if(_c) _c.textContent=(i+1)+' из '+files.length;
     await new Promise(function(r){setTimeout(r,0);}); // yield to UI
 
     try {
@@ -4211,6 +4261,9 @@ async function aiFileBatchImport() {
       console.warn('batch import: failed', file.name, e);
       errors++; errorFiles.push({name:file.name, reason: (e && e.message ? e.message : String(e))});
     }
+  }
+  } finally {
+    _importProgressHide();
   }
 
   await saveData();
